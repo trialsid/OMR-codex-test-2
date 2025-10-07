@@ -92,7 +92,7 @@ def draw_grid_markers(content: PDFContent, geom: PageGeometry, markers: MarkerCo
             content.fill_rect(x, y, markers.grid_marker_size, markers.grid_marker_size)
 
 
-def draw_roll_number_section(content: PDFContent, geom: PageGeometry, layout: BubbleLayout, sheet: SheetLayout) -> tuple[float, float]:
+def draw_roll_number_section(content: PDFContent, geom: PageGeometry, layout: BubbleLayout, sheet: SheetLayout) -> tuple[float, float, float]:
     area_width = sheet.roll_columns * layout.diameter + (sheet.roll_columns - 1) * layout.option_gap + 2 * layout.column_padding
     x_start = geom.margin
     top_y = geom.height - geom.margin - layout.diameter
@@ -105,7 +105,10 @@ def draw_roll_number_section(content: PDFContent, geom: PageGeometry, layout: Bu
             y = top_y - row * layout.vertical_gap
             content.stroke_circle(x, y, layout.radius)
 
-    return top_y, area_width
+    # Calculate bottom of roll number section
+    bottom_y = top_y - (sheet.roll_rows - 1) * layout.vertical_gap - layout.radius
+
+    return top_y, area_width, bottom_y
 
 
 def draw_question_columns(
@@ -115,20 +118,26 @@ def draw_question_columns(
     top_y: float,
     x_start: float,
     sheet: SheetLayout,
+    roll_bottom: float,
 ) -> None:
     options = sheet.question_options
     column_width = layout.group_width(options)
     available_width = geom.width - geom.margin - x_start
     columns = max(1, int(available_width // column_width))
 
+    # Calculate total rows available from top to bottom
     available_height = top_y - geom.margin + layout.diameter
-    rows_per_column = max(0, int(available_height // layout.vertical_gap))
+    total_rows = max(0, int(available_height // layout.vertical_gap))
 
     content.set_line_width(1)
     content.set_stroke_color(0, 0, 0)
     for col in range(columns):
         x_base = x_start + col * column_width + layout.column_padding / 2
-        for row in range(rows_per_column):
+
+        # First column starts at row 11 (after roll numbers), others start at row 1
+        start_row = sheet.roll_rows if col == 0 else 0
+
+        for row in range(start_row, total_rows):
             y = top_y - row * layout.vertical_gap
             if y - layout.radius <= geom.margin:
                 break
@@ -191,9 +200,9 @@ def generate_omr_sheet(output_path: Path) -> None:
 
     draw_anchor_markers(content, geom, markers)
     draw_grid_markers(content, geom, markers)
-    roll_top, roll_width = draw_roll_number_section(content, geom, layout, sheet)
+    roll_top, roll_width, roll_bottom = draw_roll_number_section(content, geom, layout, sheet)
     question_x_start = geom.margin + roll_width
-    draw_question_columns(content, geom, layout, roll_top, question_x_start, sheet)
+    draw_question_columns(content, geom, layout, roll_top, question_x_start, sheet, roll_bottom)
 
     build_pdf(geom.width, geom.height, content.render(), output_path)
 
