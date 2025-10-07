@@ -101,25 +101,26 @@ def draw_grid_markers(content: PDFContent, geom: PageGeometry, markers: MarkerCo
 
 
 def draw_roll_number_section(content: PDFContent, geom: PageGeometry, layout: BubbleLayout, sheet: SheetLayout) -> tuple[float, float, float]:
-    area_width = (
-        sheet.roll_columns * layout.diameter
-        + (sheet.roll_columns - 1) * layout.option_gap
-        + layout.column_padding
-    )
+    bubble_span = sheet.roll_columns * layout.diameter
+    bubble_span += (sheet.roll_columns - 1) * layout.option_gap
+    area_width = layout.label_column_width + layout.column_padding + bubble_span
     left_padding = layout.column_padding / 2
-    x_start = geom.margin + left_padding + layout.radius
+    x_start = geom.margin + layout.label_column_width + left_padding + layout.radius
     top_y = geom.height - geom.margin - layout.diameter
 
-    label_x = geom.margin + left_padding
+    label_x = geom.margin + layout.label_column_width + left_padding
     label_y = top_y + layout.radius / 2
     content.draw_text(label_x, label_y, "Roll Number")
 
     content.set_line_width(1)
     content.set_stroke_color(0, 0, 0)
-    for col in range(sheet.roll_columns):
-        x = x_start + col * (layout.diameter + layout.option_gap)
-        for row in range(sheet.roll_rows):
-            y = top_y - (row + 1) * layout.vertical_gap
+    for row in range(sheet.roll_rows):
+        y = top_y - (row + 1) * layout.vertical_gap
+        digit_x = geom.margin + layout.label_column_width - layout.radius
+        digit_y = y - layout.radius / 2
+        content.draw_text(digit_x, digit_y, str(row % 10))
+        for col in range(sheet.roll_columns):
+            x = x_start + col * (layout.diameter + layout.option_gap)
             content.stroke_circle(x, y, layout.radius)
 
     # Calculate bottom of roll number section
@@ -159,7 +160,7 @@ def draw_question_columns(
         len(row_centers),
     )
 
-    label_x = x_start + layout.column_padding / 2
+    label_x = x_start + layout.label_column_width + layout.column_padding / 2
     label_row_index = first_column_start + 1
     if label_row_index < len(row_centers):
         label_y = row_centers[label_row_index]
@@ -167,8 +168,11 @@ def draw_question_columns(
 
     content.set_line_width(1)
     content.set_stroke_color(0, 0, 0)
+    question_number = 1
     for col in range(columns):
-        x_base = x_start + col * column_width + layout.column_padding / 2
+        column_origin = x_start + col * column_width
+        x_base = column_origin + layout.label_column_width + layout.column_padding / 2
+        label_column_x = column_origin + layout.label_column_width - layout.radius
 
         if col == 0:
             start_row = first_column_start + 2
@@ -180,9 +184,12 @@ def draw_question_columns(
                 continue
 
         for y in row_centers[start_row:]:
+            label_y = y - layout.radius / 2
+            content.draw_text(label_column_x, label_y, str(question_number))
             for opt in range(options):
                 x = x_base + layout.radius + opt * (layout.diameter + layout.option_gap)
                 content.stroke_circle(x, y, layout.radius)
+            question_number += 1
 
 
 def _frange(start: float, stop: float, step: float) -> Iterable[float]:

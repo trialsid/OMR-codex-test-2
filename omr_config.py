@@ -29,6 +29,7 @@ class BubbleLayout:
     vertical_gap: float = 26
     option_gap: float = 12
     column_padding: float = 24
+    label_column_width: float = 28
 
     @property
     def diameter(self) -> float:
@@ -38,7 +39,7 @@ class BubbleLayout:
         """Calculate width of a bubble group."""
         bubble_span = options * self.diameter
         gap_span = (options - 1) * self.option_gap if options > 1 else 0
-        return self.column_padding + bubble_span + gap_span
+        return self.label_column_width + self.column_padding + bubble_span + gap_span
 
 
 @dataclass(frozen=True)
