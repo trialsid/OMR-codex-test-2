@@ -125,23 +125,31 @@ def draw_question_columns(
     available_width = geom.width - geom.margin - x_start
     columns = max(1, int(available_width // column_width))
 
-    # Calculate total rows available from top to bottom
-    available_height = top_y - geom.margin + layout.diameter
-    total_rows = max(0, int(available_height // layout.vertical_gap))
+    # Determine all candidate row centers, trimming anything that would spill past the margin
+    row_centers: List[float] = []
+    row_index = 0
+    while True:
+        y = top_y - row_index * layout.vertical_gap
+        if y - layout.radius <= geom.margin:
+            break
+        row_centers.append(y)
+        row_index += 1
+
+    # For the first column we need to avoid overlapping the roll number section.
+    # Compute the first row index whose bottom edge sits below the roll bubbles.
+    first_column_start = next(
+        (idx for idx, y in enumerate(row_centers) if y - layout.radius < roll_bottom),
+        len(row_centers),
+    )
 
     content.set_line_width(1)
     content.set_stroke_color(0, 0, 0)
     for col in range(columns):
         x_base = x_start + col * column_width + layout.column_padding / 2
 
-        # First column: skip row 11 (gap), start questions at row 12
-        # Other columns: start from row 1 (top)
-        start_row = sheet.roll_rows + 1 if col == 0 else 0
+        start_row = first_column_start if col == 0 else 0
 
-        for row in range(start_row, total_rows):
-            y = top_y - row * layout.vertical_gap
-            if y - layout.radius <= geom.margin:
-                break
+        for y in row_centers[start_row:]:
             for opt in range(options):
                 x = x_base + layout.radius + opt * (layout.diameter + layout.option_gap)
                 content.stroke_circle(x, y, layout.radius)
@@ -201,8 +209,9 @@ def generate_omr_sheet(output_path: Path) -> None:
 
     draw_anchor_markers(content, geom, markers)
     draw_grid_markers(content, geom, markers)
-    roll_top, roll_width, roll_bottom = draw_roll_number_section(content, geom, layout, sheet)
-    question_x_start = geom.margin + roll_width
+    roll_top, _, roll_bottom = draw_roll_number_section(content, geom, layout, sheet)
+    # Begin the first question column directly beneath the roll number section.
+    question_x_start = geom.margin
     draw_question_columns(content, geom, layout, roll_top, question_x_start, sheet, roll_bottom)
 
     build_pdf(geom.width, geom.height, content.render(), output_path)
