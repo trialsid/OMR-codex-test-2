@@ -134,8 +134,9 @@ def draw_question_columns(
     for col in range(columns):
         x_base = x_start + col * column_width + layout.column_padding / 2
 
-        # First column starts at row 11 (after roll numbers), others start at row 1
-        start_row = sheet.roll_rows if col == 0 else 0
+        # First column: skip row 11 (gap), start questions at row 12
+        # Other columns: start from row 1 (top)
+        start_row = sheet.roll_rows + 1 if col == 0 else 0
 
         for row in range(start_row, total_rows):
             y = top_y - row * layout.vertical_gap
