@@ -147,12 +147,15 @@ def detect_bubbles(image: np.ndarray, layout: BubbleLayout) -> List[Bubble]:
     return bubbles
 
 
-def group_bubbles_into_questions(bubbles: List[Bubble], sheet: SheetLayout) -> Tuple[List[List[Bubble]], List[List[Bubble]]]:
+def group_bubbles_into_questions(
+    bubbles: List[Bubble], sheet: SheetLayout, layout: BubbleLayout
+) -> Tuple[List[List[Bubble]], List[List[Bubble]]]:
     """Group bubbles into roll number section and question sections.
 
     Args:
         bubbles: All detected bubbles sorted
         sheet: Sheet layout configuration
+        layout: Bubble layout configuration (for spacing expectations)
 
     Returns:
         (roll_number_groups, question_groups) where each group is a list of bubbles
@@ -212,12 +215,14 @@ def group_bubbles_into_questions(bubbles: List[Bubble], sheet: SheetLayout) -> T
     # Sort by x-coordinate to identify columns
     sorted_by_x = sorted(all_question_bubbles, key=lambda item: item[0])
 
-    # Cluster into columns (tolerance of 50 pixels)
+    # Cluster into columns using the configured column width for tolerance
+    column_width = layout.group_width(sheet.question_options)
+    column_tolerance = column_width / 2
     columns = []
     current_column = [sorted_by_x[0]]
 
     for item in sorted_by_x[1:]:
-        if item[0] - current_column[0][0] < 50:  # Same column
+        if item[0] - current_column[0][0] < column_tolerance:  # Same column
             current_column.append(item)
         else:  # New column
             columns.append(current_column)
@@ -339,7 +344,7 @@ def process_omr_sheet(input_path: Path, output_path: Path,
         return False
 
     # Group bubbles
-    roll_groups, question_groups = group_bubbles_into_questions(bubbles, sheet)
+    roll_groups, question_groups = group_bubbles_into_questions(bubbles, sheet, layout)
     print(f"Found {len(roll_groups)} roll number rows and {len(question_groups)} questions")
 
     # Overlay labels
