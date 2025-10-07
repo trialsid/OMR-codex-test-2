@@ -10,42 +10,11 @@ The resulting PDF is saved inside the ``sheets/`` directory.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 from typing import Iterable, List
 
-
-@dataclass(frozen=True)
-class PageGeometry:
-    width: float
-    height: float
-    margin: float
-
-    @property
-    def inner_width(self) -> float:
-        return self.width - 2 * self.margin
-
-    @property
-    def inner_height(self) -> float:
-        return self.height - 2 * self.margin
-
-
-@dataclass(frozen=True)
-class BubbleLayout:
-    radius: float
-    vertical_gap: float
-    option_gap: float
-    column_padding: float
-
-    @property
-    def diameter(self) -> float:
-        return 2 * self.radius
-
-    def group_width(self, options: int) -> float:
-        bubble_span = options * self.diameter
-        gap_span = (options - 1) * self.option_gap if options > 1 else 0
-        return self.column_padding + bubble_span + gap_span
+from omr_config import PageGeometry, BubbleLayout, MarkerConfig, SheetLayout
 
 
 class PDFContent:
@@ -98,47 +67,41 @@ class PDFContent:
         return "\n".join(self._commands) + "\n"
 
 
-def draw_anchor_markers(content: PDFContent, geom: PageGeometry) -> None:
-    size = 18
+def draw_anchor_markers(content: PDFContent, geom: PageGeometry, markers: MarkerConfig) -> None:
     inset = geom.margin / 2
     positions = [
-        (inset, geom.height - inset - size),
-        (geom.width - inset - size, geom.height - inset - size),
+        (inset, geom.height - inset - markers.anchor_size),
+        (geom.width - inset - markers.anchor_size, geom.height - inset - markers.anchor_size),
         (inset, inset),
-        (geom.width - inset - size, inset),
+        (geom.width - inset - markers.anchor_size, inset),
     ]
     content.set_fill_color(0, 0, 0)
     for x, y in positions:
-        content.fill_rect(x, y, size, size)
+        content.fill_rect(x, y, markers.anchor_size, markers.anchor_size)
 
 
-def draw_grid_markers(content: PDFContent, geom: PageGeometry) -> None:
-    marker_size = 6
-    spacing = 42
-    start_y = geom.margin + spacing
-    end_y = geom.height - geom.margin - spacing
-    y_positions = list(_frange(start_y, end_y, spacing))
-    x_offsets = (geom.margin / 2, geom.width - geom.margin / 2 - marker_size)
+def draw_grid_markers(content: PDFContent, geom: PageGeometry, markers: MarkerConfig) -> None:
+    start_y = geom.margin + markers.grid_spacing
+    end_y = geom.height - geom.margin - markers.grid_spacing
+    y_positions = list(_frange(start_y, end_y, markers.grid_spacing))
+    x_offsets = (geom.margin / 2, geom.width - geom.margin / 2 - markers.grid_marker_size)
 
     content.set_fill_color(0, 0, 0)
     for y in y_positions:
         for x in x_offsets:
-            content.fill_rect(x, y, marker_size, marker_size)
+            content.fill_rect(x, y, markers.grid_marker_size, markers.grid_marker_size)
 
 
-def draw_roll_number_section(content: PDFContent, geom: PageGeometry, layout: BubbleLayout) -> tuple[float, float]:
-    columns = 3
-    rows = 10
-
-    area_width = columns * layout.diameter + (columns - 1) * layout.option_gap + 2 * layout.column_padding
+def draw_roll_number_section(content: PDFContent, geom: PageGeometry, layout: BubbleLayout, sheet: SheetLayout) -> tuple[float, float]:
+    area_width = sheet.roll_columns * layout.diameter + (sheet.roll_columns - 1) * layout.option_gap + 2 * layout.column_padding
     x_start = geom.margin
     top_y = geom.height - geom.margin - layout.diameter
 
     content.set_line_width(1)
     content.set_stroke_color(0, 0, 0)
-    for col in range(columns):
+    for col in range(sheet.roll_columns):
         x = x_start + layout.column_padding + layout.radius + col * (layout.diameter + layout.option_gap)
-        for row in range(rows):
+        for row in range(sheet.roll_rows):
             y = top_y - row * layout.vertical_gap
             content.stroke_circle(x, y, layout.radius)
 
@@ -151,8 +114,9 @@ def draw_question_columns(
     layout: BubbleLayout,
     top_y: float,
     x_start: float,
-    options: int = 4,
+    sheet: SheetLayout,
 ) -> None:
+    options = sheet.question_options
     column_width = layout.group_width(options)
     available_width = geom.width - geom.margin - x_start
     columns = max(1, int(available_width // column_width))
@@ -217,17 +181,19 @@ def build_pdf(width: float, height: float, content_stream: str, output_path: Pat
 
 
 def generate_omr_sheet(output_path: Path) -> None:
-    geom = PageGeometry(width=595.276, height=841.89, margin=36)
-    layout = BubbleLayout(radius=8, vertical_gap=26, option_gap=12, column_padding=24)
+    geom = PageGeometry()
+    layout = BubbleLayout()
+    markers = MarkerConfig()
+    sheet = SheetLayout()
 
     ensure_output_directory(output_path.parent)
     content = PDFContent()
 
-    draw_anchor_markers(content, geom)
-    draw_grid_markers(content, geom)
-    roll_top, roll_width = draw_roll_number_section(content, geom, layout)
+    draw_anchor_markers(content, geom, markers)
+    draw_grid_markers(content, geom, markers)
+    roll_top, roll_width = draw_roll_number_section(content, geom, layout, sheet)
     question_x_start = geom.margin + roll_width
-    draw_question_columns(content, geom, layout, roll_top, question_x_start)
+    draw_question_columns(content, geom, layout, roll_top, question_x_start, sheet)
 
     build_pdf(geom.width, geom.height, content.render(), output_path)
 
