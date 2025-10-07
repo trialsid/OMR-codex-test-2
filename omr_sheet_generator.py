@@ -142,10 +142,6 @@ def draw_question_columns(
     available_width = geom.width - geom.margin - x_start
     columns = max(1, int(available_width // column_width))
 
-    label_x = x_start + layout.column_padding / 2
-    label_y = top_y + layout.radius / 2
-    content.draw_text(label_x, label_y, "Questions")
-
     # Determine all candidate row centers, trimming anything that would spill past the margin
     row_centers: List[float] = []
     row_index = 1
@@ -163,12 +159,25 @@ def draw_question_columns(
         len(row_centers),
     )
 
+    label_x = x_start + layout.column_padding / 2
+    label_row_index = first_column_start + 1
+    if label_row_index < len(row_centers):
+        label_y = row_centers[label_row_index]
+        content.draw_text(label_x, label_y, "Questions")
+
     content.set_line_width(1)
     content.set_stroke_color(0, 0, 0)
     for col in range(columns):
         x_base = x_start + col * column_width + layout.column_padding / 2
 
-        start_row = first_column_start if col == 0 else 0
+        if col == 0:
+            start_row = first_column_start + 2
+            if start_row >= len(row_centers):
+                continue
+        else:
+            start_row = 0
+            if not row_centers:
+                continue
 
         for y in row_centers[start_row:]:
             for opt in range(options):
