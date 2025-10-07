@@ -24,6 +24,14 @@ class PDFContent:
     def add(self, command: str) -> None:
         self._commands.append(command)
 
+    def show_text(self, x: float, y: float, text: str, font: str = "F1", size: float = 12) -> None:
+        escaped = _escape_text(text)
+        self.add("BT")
+        self.add(f"/{font} {_fmt(size)} Tf")
+        self.add(f"1 0 0 1 {_fmt(x)} {_fmt(y)} Tm")
+        self.add(f"({escaped}) Tj")
+        self.add("ET")
+
     def set_line_width(self, width: float) -> None:
         self.add(f"{_fmt(width)} w")
 
@@ -92,33 +100,38 @@ def draw_grid_markers(content: PDFContent, geom: PageGeometry, markers: MarkerCo
             content.fill_rect(x, y, markers.grid_marker_size, markers.grid_marker_size)
 
 
-def draw_roll_number_section(content: PDFContent, geom: PageGeometry, layout: BubbleLayout, sheet: SheetLayout) -> tuple[float, float, float]:
-    area_width = sheet.roll_columns * layout.diameter + (sheet.roll_columns - 1) * layout.option_gap + 2 * layout.column_padding
+def draw_roll_number_section(content: PDFContent, geom: PageGeometry, layout: BubbleLayout, sheet: SheetLayout) -> float:
     x_start = geom.margin
-    top_y = geom.height - geom.margin - layout.diameter
+    first_row_center = geom.height - geom.margin - layout.radius
 
     content.set_line_width(1)
     content.set_stroke_color(0, 0, 0)
+
+    # Add a header label row above the roll number bubbles.
+    content.show_text(x_start, first_row_center - layout.radius / 2, "Roll Number", size=14)
+
     for col in range(sheet.roll_columns):
         x = x_start + layout.column_padding + layout.radius + col * (layout.diameter + layout.option_gap)
         for row in range(sheet.roll_rows):
-            y = top_y - row * layout.vertical_gap
-            content.stroke_circle(x, y, layout.radius)
+            center_y = first_row_center - (row + 1) * layout.vertical_gap
+            content.stroke_circle(x, center_y, layout.radius)
 
-    # Calculate bottom of roll number section
-    bottom_y = top_y - (sheet.roll_rows - 1) * layout.vertical_gap - layout.radius
+    # Insert a "Questions" label row before the question section begins.
+    questions_label_center = first_row_center - (sheet.roll_rows + 1) * layout.vertical_gap
+    content.show_text(x_start, questions_label_center - layout.radius / 2, "Questions", size=14)
 
-    return top_y, area_width, bottom_y
+    first_question_center = first_row_center - (sheet.roll_rows + 2) * layout.vertical_gap
+
+    return first_question_center
 
 
 def draw_question_columns(
     content: PDFContent,
     geom: PageGeometry,
     layout: BubbleLayout,
-    top_y: float,
+    first_question_center: float,
     x_start: float,
     sheet: SheetLayout,
-    roll_bottom: float,
 ) -> None:
     options = sheet.question_options
     column_width = layout.group_width(options)
@@ -129,27 +142,18 @@ def draw_question_columns(
     row_centers: List[float] = []
     row_index = 0
     while True:
-        y = top_y - row_index * layout.vertical_gap
+        y = first_question_center - row_index * layout.vertical_gap
         if y - layout.radius <= geom.margin:
             break
         row_centers.append(y)
         row_index += 1
 
-    # For the first column we need to avoid overlapping the roll number section.
-    # Compute the first row index whose bottom edge sits below the roll bubbles.
-    first_column_start = next(
-        (idx for idx, y in enumerate(row_centers) if y - layout.radius < roll_bottom),
-        len(row_centers),
-    )
-
     content.set_line_width(1)
     content.set_stroke_color(0, 0, 0)
     for col in range(columns):
-        x_base = x_start + col * column_width + layout.column_padding / 2
+        x_base = x_start + col * column_width + layout.column_padding
 
-        start_row = first_column_start if col == 0 else 0
-
-        for y in row_centers[start_row:]:
+        for y in row_centers:
             for opt in range(options):
                 x = x_base + layout.radius + opt * (layout.diameter + layout.option_gap)
                 content.stroke_circle(x, y, layout.radius)
@@ -173,8 +177,9 @@ def build_pdf(width: float, height: float, content_stream: str, output_path: Pat
     objects = [
         "<< /Type /Catalog /Pages 2 0 R >>",
         f"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 {_fmt(width)} {_fmt(height)}] >>",
-        "<< /Type /Page /Parent 2 0 R /Resources << >> /Contents 4 0 R >>",
+        "<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
         f"<< /Length {len(content_stream.encode('ascii'))} >>\nstream\n{content_stream}endstream",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
     ]
 
     offsets: List[int] = []
@@ -209,10 +214,10 @@ def generate_omr_sheet(output_path: Path) -> None:
 
     draw_anchor_markers(content, geom, markers)
     draw_grid_markers(content, geom, markers)
-    roll_top, _, roll_bottom = draw_roll_number_section(content, geom, layout, sheet)
+    first_question_center = draw_roll_number_section(content, geom, layout, sheet)
     # Begin the first question column directly beneath the roll number section.
     question_x_start = geom.margin
-    draw_question_columns(content, geom, layout, roll_top, question_x_start, sheet, roll_bottom)
+    draw_question_columns(content, geom, layout, first_question_center, question_x_start, sheet)
 
     build_pdf(geom.width, geom.height, content.render(), output_path)
 
@@ -222,6 +227,10 @@ def _fmt(value: float) -> str:
     if "." in formatted:
         formatted = formatted.rstrip("0").rstrip(".")
     return formatted or "0"
+
+
+def _escape_text(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
 
 
 if __name__ == "__main__":
