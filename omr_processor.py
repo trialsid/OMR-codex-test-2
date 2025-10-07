@@ -15,7 +15,7 @@ import cv2
 import numpy as np
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 from omr_config import PageGeometry, BubbleLayout, MarkerConfig, SheetLayout
 
@@ -206,96 +206,236 @@ def analyze_bubble_fill(gray: np.ndarray, x: int, y: int, radius: int, threshold
     return is_filled, fill_intensity
 
 
-def group_bubbles_into_questions(
-    bubbles: List[Bubble], sheet: SheetLayout, layout: BubbleLayout
+def detect_grid_markers(image: np.ndarray, geom: PageGeometry,
+                        markers: MarkerConfig) -> Dict[str, List[Tuple[int, int]]]:
+    """Detect vertical grid markers used to align bubble rows."""
+
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    height, width = gray.shape
+    scale_x = width / geom.width
+    scale_y = height / geom.height
+
+    expected_size = markers.grid_marker_size * (scale_x + scale_y) / 2
+    min_area = (expected_size * 0.4) ** 2
+    max_area = (expected_size * 1.8) ** 2
+
+    left_markers: List[Tuple[int, int]] = []
+    right_markers: List[Tuple[int, int]] = []
+    edge_margin = int(geom.margin * scale_x * 1.2)
+
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        if area < min_area or area > max_area:
+            continue
+
+        x, y, w, h = cv2.boundingRect(contour)
+        if h == 0:
+            continue
+        aspect_ratio = float(w) / h
+        if not (0.6 <= aspect_ratio <= 1.4):
+            continue
+
+        center = (x + w // 2, y + h // 2)
+        if center[0] < edge_margin:
+            left_markers.append(center)
+        elif center[0] > width - edge_margin:
+            right_markers.append(center)
+
+    left_markers.sort(key=lambda p: p[1])
+    right_markers.sort(key=lambda p: p[1])
+
+    return {"left": left_markers, "right": right_markers}
+
+
+def compute_grid_marker_rows(geom: PageGeometry, markers: MarkerConfig) -> List[float]:
+    """Return the template y-positions of vertical grid markers."""
+
+    start_y = geom.margin + markers.grid_spacing
+    end_y = geom.height - geom.margin - markers.grid_spacing
+
+    y_positions: List[float] = []
+    current = start_y
+    while current <= end_y + 1e-6:
+        y_positions.append(current)
+        current += markers.grid_spacing
+
+    return y_positions
+
+
+def build_coordinate_mappers(
+    image: np.ndarray,
+    geom: PageGeometry,
+    markers: MarkerConfig,
+    detected_markers: Dict[str, List[Tuple[int, int]]]
+) -> Tuple[Callable[[float], int], Callable[[float], int]]:
+    """Create conversion functions from PDF coordinates to image pixels."""
+
+    height, width = image.shape[:2]
+    scale_x = width / geom.width
+
+    def map_x(x_value: float) -> int:
+        return int(round(x_value * scale_x))
+
+    left_markers = detected_markers.get("left", []) if detected_markers else []
+    expected_rows = compute_grid_marker_rows(geom, markers)
+
+    if left_markers and len(left_markers) >= 2:
+        usable = min(len(left_markers), len(expected_rows))
+        pdf_top = [geom.height - expected_rows[i] for i in range(usable)]
+        image_y = [left_markers[i][1] for i in range(usable)]
+
+        A = np.vstack([np.ones(usable), pdf_top]).T
+        coeffs, _, _, _ = np.linalg.lstsq(A, np.array(image_y, dtype=float), rcond=None)
+        intercept, slope = coeffs.tolist()
+
+        def map_y(y_value: float) -> int:
+            top_origin = geom.height - y_value
+            return int(round(intercept + slope * top_origin))
+
+        return map_x, map_y
+
+    scale_y = height / geom.height
+
+    def fallback_map_y(y_value: float) -> int:
+        top_origin = geom.height - y_value
+        return int(round(top_origin * scale_y))
+
+    return map_x, fallback_map_y
+
+
+def compute_template_positions(
+    geom: PageGeometry,
+    layout: BubbleLayout,
+    sheet: SheetLayout,
+) -> Tuple[List[List[Tuple[float, float]]], List[List[Tuple[float, float]]]]:
+    """Calculate bubble centers for roll rows and questions in template space."""
+
+    left_padding = layout.column_padding / 2
+    roll_x_start = geom.margin + layout.label_column_width + left_padding + layout.radius
+    roll_top_y = geom.height - geom.margin - layout.diameter
+
+    roll_positions: List[List[Tuple[float, float]]] = []
+    for row in range(sheet.roll_rows):
+        y = roll_top_y - (row + 1) * layout.vertical_gap
+        row_positions: List[Tuple[float, float]] = []
+        for col in range(sheet.roll_columns):
+            x = roll_x_start + col * (layout.diameter + layout.option_gap)
+            row_positions.append((x, y))
+        roll_positions.append(row_positions)
+
+    roll_bottom = roll_top_y - sheet.roll_rows * layout.vertical_gap - layout.radius
+
+    options = sheet.question_options
+    column_width = layout.group_width(options)
+    question_x_start = geom.margin
+    available_width = geom.width - geom.margin - question_x_start
+    columns = max(1, int(available_width // column_width))
+
+    row_centers: List[float] = []
+    row_index = 1
+    while True:
+        y = roll_top_y - row_index * layout.vertical_gap
+        if y - layout.radius <= geom.margin:
+            break
+        row_centers.append(y)
+        row_index += 1
+
+    first_column_start = next(
+        (idx for idx, y in enumerate(row_centers) if y - layout.radius < roll_bottom),
+        len(row_centers)
+    )
+
+    question_positions: List[List[Tuple[float, float]]] = []
+    for col in range(columns):
+        column_origin = question_x_start + col * column_width
+        x_base = column_origin + layout.label_column_width + layout.column_padding / 2
+
+        if col == 0:
+            start_row = first_column_start + 2
+            if start_row >= len(row_centers):
+                continue
+        else:
+            start_row = 0
+            if not row_centers:
+                continue
+
+        for y in row_centers[start_row:]:
+            group: List[Tuple[float, float]] = []
+            for opt in range(options):
+                x = x_base + layout.radius + opt * (layout.diameter + layout.option_gap)
+                group.append((x, y))
+            question_positions.append(group)
+
+    return roll_positions, question_positions
+
+
+def map_detected_bubbles_to_template(
+    image: np.ndarray,
+    detected_bubbles: List[Bubble],
+    roll_template: List[List[Tuple[float, float]]],
+    question_template: List[List[Tuple[float, float]]],
+    geom: PageGeometry,
+    layout: BubbleLayout,
+    markers: MarkerConfig,
+    detected_markers: Dict[str, List[Tuple[int, int]]]
 ) -> Tuple[List[List[Bubble]], List[List[Bubble]]]:
-    """Group bubbles into roll number section and question sections.
+    """Fuse circle detection with the template grid to recover missing bubbles."""
 
-    Args:
-        bubbles: All detected bubbles sorted
-        sheet: Sheet layout configuration
-        layout: Bubble layout configuration (for spacing expectations)
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
+    map_x, map_y = build_coordinate_mappers(image, geom, markers, detected_markers)
 
-    Returns:
-        (roll_number_groups, question_groups) where each group is a list of bubbles
-    """
-    if not bubbles:
-        return [], []
+    scale_x = image.shape[1] / geom.width
+    scale_y = image.shape[0] / geom.height
+    template_radius = int(round(layout.radius * (scale_x + scale_y) / 2))
+    tolerance = template_radius * 1.5
 
-    # Group all bubbles by rows first (same y-coordinate within tolerance)
-    bubbles_sorted = sorted(bubbles, key=lambda b: (b.y, b.x))
-    rows = []
-    current_row = []
+    used_indices: set[int] = set()
 
-    for bubble in bubbles_sorted:
-        if not current_row or abs(bubble.y - current_row[0].y) < 15:
-            current_row.append(bubble)
+    def nearest_detected(x_pos: int, y_pos: int) -> Optional[Tuple[int, Bubble]]:
+        best_idx: Optional[int] = None
+        best_distance = tolerance
+        for idx, bubble in enumerate(detected_bubbles):
+            if idx in used_indices:
+                continue
+            distance = np.hypot(bubble.x - x_pos, bubble.y - y_pos)
+            if distance < best_distance:
+                best_distance = distance
+                best_idx = idx
+        if best_idx is None:
+            return None
+        used_indices.add(best_idx)
+        return best_idx, detected_bubbles[best_idx]
+
+    def instantiate_bubble(x_pdf: float, y_pdf: float) -> Bubble:
+        expected_x = map_x(x_pdf)
+        expected_y = map_y(y_pdf)
+
+        match = nearest_detected(expected_x, expected_y)
+        if match is not None:
+            _, detected = match
+            center_x, center_y = detected.x, detected.y
+            radius = detected.radius
         else:
-            if current_row:
-                rows.append(sorted(current_row, key=lambda b: b.x))
-            current_row = [bubble]
-    if current_row:
-        rows.append(sorted(current_row, key=lambda b: b.x))
+            center_x, center_y = expected_x, expected_y
+            radius = template_radius
 
-    # Process all rows
-    roll_bubbles = []
-    all_question_bubbles = []  # Collect all question bubbles with position info
+        is_filled, fill_intensity = analyze_bubble_fill(gray, center_x, center_y, radius, layout.fill_threshold)
+        return Bubble(x=center_x, y=center_y, radius=radius,
+                      is_filled=is_filled, fill_intensity=fill_intensity)
 
-    for i, row in enumerate(rows):
-        if i < sheet.roll_rows:
-            # First 10 rows: extract roll numbers (first 3) and questions (rest)
-            if len(row) >= sheet.roll_columns:
-                roll_bubbles.append(row[:sheet.roll_columns])
-                # Remaining bubbles in this row are questions
-                question_bubbles_in_row = row[sheet.roll_columns:]
-            else:
-                question_bubbles_in_row = row
-        else:
-            # Rows 10+: all bubbles are questions
-            question_bubbles_in_row = row
+    roll_groups: List[List[Bubble]] = []
+    for row in roll_template:
+        roll_groups.append([instantiate_bubble(x, y) for x, y in row])
 
-        # Group question bubbles in this row into sets of 4
-        for j in range(0, len(question_bubbles_in_row) - sheet.question_options + 1, sheet.question_options):
-            group = question_bubbles_in_row[j:j + sheet.question_options]
-            if len(group) == sheet.question_options:
-                # Verify spacing is consistent (they're part of same question)
-                gaps = [group[k+1].x - group[k].x for k in range(len(group)-1)]
-                avg_gap = sum(gaps) / len(gaps) if gaps else 0
-                # If gaps are relatively uniform, it's a valid question group
-                if all(abs(gap - avg_gap) < 30 for gap in gaps):
-                    # Store with average x position for column sorting
-                    avg_x = sum(b.x for b in group) / len(group)
-                    all_question_bubbles.append((avg_x, group[0].y, group))
+    question_groups: List[List[Bubble]] = []
+    for group in question_template:
+        question_groups.append([instantiate_bubble(x, y) for x, y in group])
 
-    # Group questions into discrete columns by clustering x-coordinates
-    if not all_question_bubbles:
-        return roll_bubbles, []
-
-    # Sort by x-coordinate to identify columns
-    sorted_by_x = sorted(all_question_bubbles, key=lambda item: item[0])
-
-    # Cluster into columns using the configured column width for tolerance
-    column_width = layout.group_width(sheet.question_options)
-    column_tolerance = column_width / 2
-    columns = []
-    current_column = [sorted_by_x[0]]
-
-    for item in sorted_by_x[1:]:
-        if item[0] - current_column[0][0] < column_tolerance:  # Same column
-            current_column.append(item)
-        else:  # New column
-            columns.append(current_column)
-            current_column = [item]
-    columns.append(current_column)
-
-    # Sort each column by y-coordinate (top to bottom), then concatenate
-    question_groups = []
-    for column in columns:
-        # Sort by y within this column
-        column_sorted = sorted(column, key=lambda item: item[1])
-        question_groups.extend([item[2] for item in column_sorted])
-
-    return roll_bubbles, question_groups
+    return roll_groups, question_groups
 
 
 def overlay_labels(image: np.ndarray, roll_groups: List[List[Bubble]],
@@ -373,7 +513,8 @@ def overlay_labels(image: np.ndarray, roll_groups: List[List[Bubble]],
 
 
 def process_omr_sheet(input_path: Path, output_path: Path,
-                      geom: PageGeometry, layout: BubbleLayout, sheet: SheetLayout) -> bool:
+                      geom: PageGeometry, layout: BubbleLayout,
+                      marker_config: MarkerConfig, sheet: SheetLayout) -> bool:
     """Process a single OMR sheet image.
 
     Args:
@@ -381,6 +522,7 @@ def process_omr_sheet(input_path: Path, output_path: Path,
         output_path: Path to save processed image
         geom: Page geometry configuration
         layout: Bubble layout configuration
+        marker_config: Marker layout configuration
         sheet: Sheet layout configuration
 
     Returns:
@@ -395,28 +537,31 @@ def process_omr_sheet(input_path: Path, output_path: Path,
     print(f"Processing {input_path.name}...")
 
     # Detect anchor markers
-    markers = detect_anchor_markers(image)
-    if markers is None or len(markers) != 4:
+    marker_positions = detect_anchor_markers(image)
+    if marker_positions is None or len(marker_positions) != 4:
         print("Failed to detect anchor markers")
         return False
 
-    print(f"Detected {len(markers)} anchor markers")
+    print(f"Detected {len(marker_positions)} anchor markers")
 
     # Correct skew
-    corrected = correct_skew(image, markers, geom)
+    corrected = correct_skew(image, marker_positions, geom)
     print("Applied perspective correction")
 
-    # Detect bubbles
+    # Detect bubbles via Hough transform
     bubbles = detect_bubbles(corrected, layout)
-    print(f"Detected {len(bubbles)} bubbles")
+    print(f"Detected {len(bubbles)} candidate bubbles")
 
-    if not bubbles:
-        print("No bubbles detected")
-        return False
+    # Detect grid markers to refine vertical alignment
+    grid_markers = detect_grid_markers(corrected, geom, marker_config)
+    print(f"Detected {len(grid_markers.get('left', []))} left grid markers and {len(grid_markers.get('right', []))} right grid markers")
 
-    # Group bubbles
-    roll_groups, question_groups = group_bubbles_into_questions(bubbles, sheet, layout)
-    print(f"Found {len(roll_groups)} roll number rows and {len(question_groups)} questions")
+    # Build template-aligned bubbles using configuration
+    roll_template, question_template = compute_template_positions(geom, layout, sheet)
+    roll_groups, question_groups = map_detected_bubbles_to_template(
+        corrected, bubbles, roll_template, question_template, geom, layout, marker_config, grid_markers
+    )
+    print(f"Mapped {len(roll_groups)} roll number rows and {len(question_groups)} questions using template")
 
     # Overlay labels
     labeled = overlay_labels(corrected, roll_groups, question_groups, sheet)
@@ -433,6 +578,7 @@ def main():
     """Main entry point."""
     geom = PageGeometry()
     layout = BubbleLayout()
+    markers = MarkerConfig()
     sheet = SheetLayout()
 
     # Process all images in sheets/ directory
@@ -456,7 +602,7 @@ def main():
 
     for image_file in image_files:
         output_file = processed_dir / f"processed_{image_file.name}"
-        success = process_omr_sheet(image_file, output_file, geom, layout, sheet)
+        success = process_omr_sheet(image_file, output_file, geom, layout, markers, sheet)
         print()
 
 
