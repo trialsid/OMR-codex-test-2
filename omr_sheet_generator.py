@@ -24,6 +24,14 @@ class PDFContent:
     def add(self, command: str) -> None:
         self._commands.append(command)
 
+    def draw_text(self, x: float, y: float, text: str, font: str = "F1", size: float = 12) -> None:
+        escaped = _escape_pdf_text(text)
+        self.add("BT")
+        self.add(f"/{font} {_fmt(size)} Tf")
+        self.add(f"{_fmt(x)} {_fmt(y)} Td")
+        self.add(f"({escaped}) Tj")
+        self.add("ET")
+
     def set_line_width(self, width: float) -> None:
         self.add(f"{_fmt(width)} w")
 
@@ -102,16 +110,20 @@ def draw_roll_number_section(content: PDFContent, geom: PageGeometry, layout: Bu
     x_start = geom.margin + left_padding + layout.radius
     top_y = geom.height - geom.margin - layout.diameter
 
+    label_x = geom.margin + left_padding
+    label_y = top_y + layout.radius / 2
+    content.draw_text(label_x, label_y, "Roll Number")
+
     content.set_line_width(1)
     content.set_stroke_color(0, 0, 0)
     for col in range(sheet.roll_columns):
         x = x_start + col * (layout.diameter + layout.option_gap)
         for row in range(sheet.roll_rows):
-            y = top_y - row * layout.vertical_gap
+            y = top_y - (row + 1) * layout.vertical_gap
             content.stroke_circle(x, y, layout.radius)
 
     # Calculate bottom of roll number section
-    bottom_y = top_y - (sheet.roll_rows - 1) * layout.vertical_gap - layout.radius
+    bottom_y = top_y - sheet.roll_rows * layout.vertical_gap - layout.radius
 
     return top_y, area_width, bottom_y
 
@@ -130,9 +142,13 @@ def draw_question_columns(
     available_width = geom.width - geom.margin - x_start
     columns = max(1, int(available_width // column_width))
 
+    label_x = x_start + layout.column_padding / 2
+    label_y = top_y + layout.radius / 2
+    content.draw_text(label_x, label_y, "Questions")
+
     # Determine all candidate row centers, trimming anything that would spill past the margin
     row_centers: List[float] = []
-    row_index = 0
+    row_index = 1
     while True:
         y = top_y - row_index * layout.vertical_gap
         if y - layout.radius <= geom.margin:
@@ -178,7 +194,7 @@ def build_pdf(width: float, height: float, content_stream: str, output_path: Pat
     objects = [
         "<< /Type /Catalog /Pages 2 0 R >>",
         f"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 {_fmt(width)} {_fmt(height)}] >>",
-        "<< /Type /Page /Parent 2 0 R /Resources << >> /Contents 4 0 R >>",
+        "<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 4 0 R >>",
         f"<< /Length {len(content_stream.encode('ascii'))} >>\nstream\n{content_stream}endstream",
     ]
 
@@ -220,6 +236,10 @@ def generate_omr_sheet(output_path: Path) -> None:
     draw_question_columns(content, geom, layout, roll_top, question_x_start, sheet, roll_bottom)
 
     build_pdf(geom.width, geom.height, content.render(), output_path)
+
+
+def _escape_pdf_text(text: str) -> str:
+    return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
 
 
 def _fmt(value: float) -> str:
