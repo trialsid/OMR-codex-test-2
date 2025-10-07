@@ -93,14 +93,19 @@ def draw_grid_markers(content: PDFContent, geom: PageGeometry, markers: MarkerCo
 
 
 def draw_roll_number_section(content: PDFContent, geom: PageGeometry, layout: BubbleLayout, sheet: SheetLayout) -> tuple[float, float, float]:
-    area_width = sheet.roll_columns * layout.diameter + (sheet.roll_columns - 1) * layout.option_gap + 2 * layout.column_padding
-    x_start = geom.margin
+    area_width = (
+        sheet.roll_columns * layout.diameter
+        + (sheet.roll_columns - 1) * layout.option_gap
+        + layout.column_padding
+    )
+    left_padding = layout.column_padding / 2
+    x_start = geom.margin + left_padding + layout.radius
     top_y = geom.height - geom.margin - layout.diameter
 
     content.set_line_width(1)
     content.set_stroke_color(0, 0, 0)
     for col in range(sheet.roll_columns):
-        x = x_start + layout.column_padding + layout.radius + col * (layout.diameter + layout.option_gap)
+        x = x_start + col * (layout.diameter + layout.option_gap)
         for row in range(sheet.roll_rows):
             y = top_y - row * layout.vertical_gap
             content.stroke_circle(x, y, layout.radius)
