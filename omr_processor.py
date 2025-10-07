@@ -205,12 +205,31 @@ def group_bubbles_into_questions(bubbles: List[Bubble], sheet: SheetLayout) -> T
                     avg_x = sum(b.x for b in group) / len(group)
                     all_question_bubbles.append((avg_x, group[0].y, group))
 
-    # Sort questions by column (x) first, then by row (y) within each column
-    # This gives us top-to-bottom, left-to-right ordering
-    all_question_bubbles.sort(key=lambda item: (item[0], item[1]))
+    # Group questions into discrete columns by clustering x-coordinates
+    if not all_question_bubbles:
+        return roll_bubbles, []
 
-    # Extract just the bubble groups
-    question_groups = [item[2] for item in all_question_bubbles]
+    # Sort by x-coordinate to identify columns
+    sorted_by_x = sorted(all_question_bubbles, key=lambda item: item[0])
+
+    # Cluster into columns (tolerance of 50 pixels)
+    columns = []
+    current_column = [sorted_by_x[0]]
+
+    for item in sorted_by_x[1:]:
+        if item[0] - current_column[0][0] < 50:  # Same column
+            current_column.append(item)
+        else:  # New column
+            columns.append(current_column)
+            current_column = [item]
+    columns.append(current_column)
+
+    # Sort each column by y-coordinate (top to bottom), then concatenate
+    question_groups = []
+    for column in columns:
+        # Sort by y within this column
+        column_sorted = sorted(column, key=lambda item: item[1])
+        question_groups.extend([item[2] for item in column_sorted])
 
     return roll_bubbles, question_groups
 
