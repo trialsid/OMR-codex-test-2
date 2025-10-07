@@ -26,6 +26,8 @@ class Bubble:
     x: int
     y: int
     radius: int
+    is_filled: bool = False
+    fill_intensity: float = 0.0  # 0.0 = empty, 1.0 = completely filled
 
     def __lt__(self, other):
         """Sort by y first (top to bottom), then x (left to right)."""
@@ -116,7 +118,7 @@ def detect_bubbles(image: np.ndarray, layout: BubbleLayout) -> List[Bubble]:
         layout: Bubble layout configuration
 
     Returns:
-        List of detected bubbles
+        List of detected bubbles with fill information
     """
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
 
@@ -139,12 +141,69 @@ def detect_bubbles(image: np.ndarray, layout: BubbleLayout) -> List[Bubble]:
     if circles is not None:
         circles = np.uint16(np.around(circles))
         for circle in circles[0, :]:
-            bubbles.append(Bubble(x=int(circle[0]), y=int(circle[1]), radius=int(circle[2])))
+            x, y, r = int(circle[0]), int(circle[1]), int(circle[2])
+            # Analyze fill state
+            is_filled, fill_intensity = analyze_bubble_fill(gray, x, y, r, layout.fill_threshold)
+            bubbles.append(Bubble(
+                x=x, y=y, radius=r,
+                is_filled=is_filled,
+                fill_intensity=fill_intensity
+            ))
 
     # Sort bubbles top-to-bottom, left-to-right
     bubbles.sort()
 
     return bubbles
+
+
+def analyze_bubble_fill(gray: np.ndarray, x: int, y: int, radius: int, threshold: float) -> Tuple[bool, float]:
+    """Analyze whether a bubble is filled by comparing interior to background ring.
+
+    Args:
+        gray: Grayscale image
+        x, y: Bubble center coordinates
+        radius: Bubble radius
+        threshold: Fill threshold (0.0 to 1.0)
+
+    Returns:
+        (is_filled, fill_intensity) tuple
+    """
+    h, w = gray.shape
+
+    # Create masks for interior and background ring
+    y_grid, x_grid = np.ogrid[:h, :w]
+    distance_from_center = np.sqrt((x_grid - x)**2 + (y_grid - y)**2)
+
+    # Interior: pixels inside radius * 0.7 (avoid edge artifacts)
+    interior_mask = distance_from_center <= (radius * 0.7)
+
+    # Background ring: pixels in ring slightly outside the bubble
+    ring_inner_radius = radius * 1.2
+    ring_outer_radius = radius * 1.8
+    background_mask = (distance_from_center >= ring_inner_radius) & (distance_from_center <= ring_outer_radius)
+
+    # Calculate mean intensity (lower = darker = more filled)
+    interior_pixels = gray[interior_mask]
+    background_pixels = gray[background_mask]
+
+    if len(interior_pixels) == 0 or len(background_pixels) == 0:
+        return False, 0.0
+
+    interior_mean = np.mean(interior_pixels)
+    background_mean = np.mean(background_pixels)
+
+    # Calculate darkness ratio: how much darker is interior compared to background
+    # Normalize to 0-1 scale where 1.0 means interior is completely black
+    if background_mean > 0:
+        darkness_ratio = (background_mean - interior_mean) / background_mean
+    else:
+        darkness_ratio = 0.0
+
+    # Clamp to [0, 1] range
+    fill_intensity = max(0.0, min(1.0, darkness_ratio))
+    is_filled = fill_intensity >= threshold
+
+    return is_filled, fill_intensity
 
 
 def group_bubbles_into_questions(
@@ -254,7 +313,19 @@ def overlay_labels(image: np.ndarray, roll_groups: List[List[Bubble]],
     """
     output = image.copy()
 
-    # Label roll numbers (digits 0-9 for each of 3 columns)
+    # First pass: Draw pink highlights for all filled bubbles
+    pink_color = (255, 0, 255)  # Bright magenta/pink in BGR
+    for row_bubbles in roll_groups:
+        for bubble in row_bubbles:
+            if bubble.is_filled:
+                cv2.circle(output, (bubble.x, bubble.y), bubble.radius + 2, pink_color, 2)
+
+    for question_bubbles in question_groups:
+        for bubble in question_bubbles:
+            if bubble.is_filled:
+                cv2.circle(output, (bubble.x, bubble.y), bubble.radius + 2, pink_color, 2)
+
+    # Second pass: Label roll numbers (digits 0-9 for each of 3 columns)
     for row_idx, row_bubbles in enumerate(roll_groups):
         digit = row_idx % 10
         for bubble in row_bubbles:
@@ -268,7 +339,7 @@ def overlay_labels(image: np.ndarray, roll_groups: List[List[Bubble]],
             text_y = bubble.y + text_size[1] // 2
             cv2.putText(output, text, (text_x, text_y), font, font_scale, (255, 0, 0), thickness)
 
-    # Label questions (A, B, C, D)
+    # Third pass: Label questions (A, B, C, D)
     option_labels = ['A', 'B', 'C', 'D']
     for q_idx, question_bubbles in enumerate(question_groups):
         question_num = q_idx + 1

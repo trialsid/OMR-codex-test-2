@@ -30,6 +30,7 @@ class BubbleLayout:
     option_gap: float = 12
     column_padding: float = 24
     label_column_width: float = 28
+    fill_threshold: float = 0.4  # Minimum darkness ratio to consider bubble filled
 
     @property
     def diameter(self) -> float:
