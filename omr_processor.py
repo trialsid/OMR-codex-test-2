@@ -137,6 +137,8 @@ def _safe_int(value: Any) -> Optional[int]:
 
 def _entry_to_bubble(
     entry: Dict[str, Any],
+    geom: PageGeometry,
+    markers: MarkerConfig,
     page_width: int,
     page_height: int,
     margin_x: int,
@@ -155,11 +157,32 @@ def _entry_to_bubble(
     except (KeyError, TypeError, ValueError):
         return None
 
-    abs_x = int(round(norm_x * page_width))
-    abs_y = int(round(norm_y * page_height))
+    anchor_inset_x = geom.margin / 2.0 + markers.anchor_size / 2.0
+    anchor_inset_y = geom.margin / 2.0 + markers.anchor_size / 2.0
+    effective_width = geom.width - 2.0 * anchor_inset_x
+    effective_height = geom.height - 2.0 * anchor_inset_y
+    if effective_width <= 0 or effective_height <= 0:
+        return None
+
+    scale_x = page_width / effective_width
+
+    x_pdf = norm_x * geom.width
+    y_pdf = norm_y * geom.height
+
+    rel_x = (x_pdf - anchor_inset_x) / effective_width
+    rel_y = ((geom.height - anchor_inset_y) - y_pdf) / effective_height
+
+    rel_x = min(max(rel_x, 0.0), 1.0)
+    rel_y = min(max(rel_y, 0.0), 1.0)
+
+    abs_x = int(round(rel_x * page_width))
+    abs_y = int(round(rel_y * page_height))
+    abs_x = min(max(abs_x, 0), max(page_width - 1, 0))
+    abs_y = min(max(abs_y, 0), max(page_height - 1, 0))
     inner_x = abs_x - margin_x
     inner_y = abs_y - margin_y
-    radius = max(1, int(round(norm_radius * page_width)))
+    radius_points = norm_radius * geom.width
+    radius = max(1, int(round(radius_points * scale_x)))
 
     if (
         inner_x < 0
@@ -192,6 +215,7 @@ def sample_bubbles_from_metadata(
     geom: PageGeometry,
     layout: BubbleLayout,
     sheet: SheetLayout,
+    markers: MarkerConfig,
 ) -> Tuple[List[List[Bubble]], List[List[Bubble]]]:
     """Evaluate bubble fill states at known coordinates."""
 
@@ -201,10 +225,20 @@ def sample_bubbles_from_metadata(
     height, width = corrected.shape[:2]
     gray = cv2.cvtColor(corrected, cv2.COLOR_BGR2GRAY) if corrected.ndim == 3 else corrected
 
-    scale_x = width / geom.width
-    scale_y = height / geom.height
-    margin_x = int(round(geom.margin * scale_x))
-    margin_y = int(round(geom.margin * scale_y))
+    anchor_inset_x = geom.margin / 2.0 + markers.anchor_size / 2.0
+    anchor_inset_y = geom.margin / 2.0 + markers.anchor_size / 2.0
+    effective_width = geom.width - 2.0 * anchor_inset_x
+    effective_height = geom.height - 2.0 * anchor_inset_y
+    if effective_width <= 0 or effective_height <= 0:
+        return [], []
+
+    scale_x = width / effective_width
+    scale_y = height / effective_height
+
+    margin_after_crop_x = max(0.0, geom.margin - anchor_inset_x)
+    margin_after_crop_y = max(0.0, geom.margin - anchor_inset_y)
+    margin_x = int(round(margin_after_crop_x * scale_x))
+    margin_y = int(round(margin_after_crop_y * scale_y))
 
     inner_gray = gray[margin_y: height - margin_y, margin_x: width - margin_x]
     if inner_gray.size == 0:
@@ -214,7 +248,17 @@ def sample_bubbles_from_metadata(
     roll_entries = metadata.get("roll_bubbles", [])
     if isinstance(roll_entries, list):
         for entry in roll_entries:
-            bubble = _entry_to_bubble(entry, width, height, margin_x, margin_y, inner_gray, layout)
+            bubble = _entry_to_bubble(
+                entry,
+                geom,
+                markers,
+                width,
+                height,
+                margin_x,
+                margin_y,
+                inner_gray,
+                layout,
+            )
             if bubble is None:
                 continue
             row_index = _safe_int(entry.get("row"))
@@ -230,7 +274,17 @@ def sample_bubbles_from_metadata(
     if isinstance(question_entries, list):
         question_map: Dict[int, List[Tuple[int, Bubble]]] = {}
         for entry in question_entries:
-            bubble = _entry_to_bubble(entry, width, height, margin_x, margin_y, inner_gray, layout)
+            bubble = _entry_to_bubble(
+                entry,
+                geom,
+                markers,
+                width,
+                height,
+                margin_x,
+                margin_y,
+                inner_gray,
+                layout,
+            )
             if bubble is None:
                 continue
             question_number = _safe_int(entry.get("question"))
@@ -375,6 +429,7 @@ def process_omr_sheet(
     geom: PageGeometry,
     layout: BubbleLayout,
     sheet: SheetLayout,
+    markers_cfg: MarkerConfig,
     metadata: Dict[str, Any],
 ) -> bool:
     """Process a single OMR sheet image.
@@ -385,6 +440,8 @@ def process_omr_sheet(
         geom: Page geometry configuration
         layout: Bubble layout configuration
         sheet: Sheet layout configuration
+        markers_cfg: Marker configuration shared with generator
+        metadata: Bubble placement metadata
 
     Returns:
         True if processing succeeded, False otherwise
@@ -398,19 +455,26 @@ def process_omr_sheet(
     print(f"Processing {input_path.name}...")
 
     # Detect anchor markers
-    markers = detect_anchor_markers(image)
-    if markers is None or len(markers) != 4:
+    anchor_points = detect_anchor_markers(image)
+    if anchor_points is None or len(anchor_points) != 4:
         print("Failed to detect anchor markers")
         return False
 
-    print(f"Detected {len(markers)} anchor markers")
+    print(f"Detected {len(anchor_points)} anchor markers")
 
     # Correct skew
-    corrected = correct_skew(image, markers, geom)
+    corrected = correct_skew(image, anchor_points, geom)
     print("Applied perspective correction")
 
     # Evaluate predefined bubble locations from metadata
-    roll_groups, question_groups = sample_bubbles_from_metadata(corrected, metadata, geom, layout, sheet)
+    roll_groups, question_groups = sample_bubbles_from_metadata(
+        corrected,
+        metadata,
+        geom,
+        layout,
+        sheet,
+        markers_cfg,
+    )
     total_roll_bubbles = sum(len(group) for group in roll_groups)
     total_questions = len(question_groups)
     print(
@@ -438,6 +502,7 @@ def main():
     geom = PageGeometry()
     layout = BubbleLayout()
     sheet = SheetLayout()
+    markers_cfg = MarkerConfig()
 
     # Process all images in sheets/ directory
     sheets_dir = Path("sheets")
@@ -469,7 +534,15 @@ def main():
 
     for image_file in image_files:
         output_file = processed_dir / f"processed_{image_file.name}"
-        success = process_omr_sheet(image_file, output_file, geom, layout, sheet, metadata)
+        success = process_omr_sheet(
+            image_file,
+            output_file,
+            geom,
+            layout,
+            sheet,
+            markers_cfg,
+            metadata,
+        )
         print()
 
 
