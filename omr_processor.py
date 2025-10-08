@@ -13,9 +13,10 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
+import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from omr_config import PageGeometry, BubbleLayout, MarkerConfig, SheetLayout
 
@@ -110,51 +111,139 @@ def correct_skew(image: np.ndarray, markers: List[Tuple[int, int]], geom: PageGe
     return corrected
 
 
-def detect_bubbles(image: np.ndarray, layout: BubbleLayout) -> List[Bubble]:
-    """Detect all bubbles in the corrected image.
 
-    Args:
-        image: Corrected grayscale or color image
-        layout: Bubble layout configuration
+def load_bubble_metadata(metadata_path: Path) -> Dict[str, Any]:
+    """Load bubble placement metadata exported by the generator."""
 
-    Returns:
-        List of detected bubbles with fill information
-    """
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
+    try:
+        raw_text = metadata_path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"Metadata file not found: {metadata_path}") from exc
 
-    # Apply Gaussian blur
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    try:
+        return json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Unable to parse metadata file {metadata_path}: {exc}") from exc
 
-    # Use Hough Circle Transform
-    circles = cv2.HoughCircles(
-        blurred,
-        cv2.HOUGH_GRADIENT,
-        dp=1,
-        minDist=15,
-        param1=50,
-        param2=30,
-        minRadius=8,
-        maxRadius=20
+
+def _safe_int(value: Any) -> Optional[int]:
+    if isinstance(value, int):
+        return value
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _entry_to_bubble(
+    entry: Dict[str, Any],
+    page_width: int,
+    page_height: int,
+    margin_x: int,
+    margin_y: int,
+    inner_gray: np.ndarray,
+    layout: BubbleLayout,
+) -> Optional[Bubble]:
+    center = entry.get("center")
+    if not isinstance(center, dict):
+        return None
+
+    try:
+        norm_x = float(center["x"])
+        norm_y = float(center["y"])
+        norm_radius = float(entry["radius"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+    abs_x = int(round(norm_x * page_width))
+    abs_y = int(round(norm_y * page_height))
+    inner_x = abs_x - margin_x
+    inner_y = abs_y - margin_y
+    radius = max(1, int(round(norm_radius * page_width)))
+
+    if (
+        inner_x < 0
+        or inner_y < 0
+        or inner_x >= inner_gray.shape[1]
+        or inner_y >= inner_gray.shape[0]
+    ):
+        return None
+
+    is_filled, intensity = analyze_bubble_fill(
+        inner_gray,
+        inner_x,
+        inner_y,
+        radius,
+        layout.fill_threshold,
     )
 
-    bubbles = []
-    if circles is not None:
-        circles = np.uint16(np.around(circles))
-        for circle in circles[0, :]:
-            x, y, r = int(circle[0]), int(circle[1]), int(circle[2])
-            # Analyze fill state
-            is_filled, fill_intensity = analyze_bubble_fill(gray, x, y, r, layout.fill_threshold)
-            bubbles.append(Bubble(
-                x=x, y=y, radius=r,
-                is_filled=is_filled,
-                fill_intensity=fill_intensity
-            ))
+    return Bubble(
+        x=abs_x,
+        y=abs_y,
+        radius=radius,
+        is_filled=is_filled,
+        fill_intensity=intensity,
+    )
 
-    # Sort bubbles top-to-bottom, left-to-right
-    bubbles.sort()
 
-    return bubbles
+def sample_bubbles_from_metadata(
+    corrected: np.ndarray,
+    metadata: Dict[str, Any],
+    geom: PageGeometry,
+    layout: BubbleLayout,
+    sheet: SheetLayout,
+) -> Tuple[List[List[Bubble]], List[List[Bubble]]]:
+    """Evaluate bubble fill states at known coordinates."""
 
+    if corrected.size == 0:
+        return [], []
+
+    height, width = corrected.shape[:2]
+    gray = cv2.cvtColor(corrected, cv2.COLOR_BGR2GRAY) if corrected.ndim == 3 else corrected
+
+    scale_x = width / geom.width
+    scale_y = height / geom.height
+    margin_x = int(round(geom.margin * scale_x))
+    margin_y = int(round(geom.margin * scale_y))
+
+    inner_gray = gray[margin_y: height - margin_y, margin_x: width - margin_x]
+    if inner_gray.size == 0:
+        return [[] for _ in range(sheet.roll_rows)], []
+
+    roll_groups: List[List[Bubble]] = [[] for _ in range(sheet.roll_rows)]
+    roll_entries = metadata.get("roll_bubbles", [])
+    if isinstance(roll_entries, list):
+        for entry in roll_entries:
+            bubble = _entry_to_bubble(entry, width, height, margin_x, margin_y, inner_gray, layout)
+            if bubble is None:
+                continue
+            row_index = _safe_int(entry.get("row"))
+            if row_index is None or not (0 <= row_index < sheet.roll_rows):
+                continue
+            roll_groups[row_index].append(bubble)
+
+    for group in roll_groups:
+        group.sort(key=lambda b: b.x)
+
+    question_groups: List[List[Bubble]] = []
+    question_entries = metadata.get("question_bubbles", [])
+    if isinstance(question_entries, list):
+        question_map: Dict[int, List[Tuple[int, Bubble]]] = {}
+        for entry in question_entries:
+            bubble = _entry_to_bubble(entry, width, height, margin_x, margin_y, inner_gray, layout)
+            if bubble is None:
+                continue
+            question_number = _safe_int(entry.get("question"))
+            option_index = _safe_int(entry.get("option_index"))
+            if question_number is None or option_index is None:
+                continue
+            question_map.setdefault(question_number, []).append((option_index, bubble))
+
+        for question_number in sorted(question_map):
+            ordered = sorted(question_map[question_number], key=lambda item: item[0])
+            question_groups.append([bubble for _, bubble in ordered])
+
+    return roll_groups, question_groups
 
 def analyze_bubble_fill(gray: np.ndarray, x: int, y: int, radius: int, threshold: float) -> Tuple[bool, float]:
     """Analyze whether a bubble is filled by comparing interior to background ring.
@@ -206,98 +295,6 @@ def analyze_bubble_fill(gray: np.ndarray, x: int, y: int, radius: int, threshold
     return is_filled, fill_intensity
 
 
-def group_bubbles_into_questions(
-    bubbles: List[Bubble], sheet: SheetLayout, layout: BubbleLayout
-) -> Tuple[List[List[Bubble]], List[List[Bubble]]]:
-    """Group bubbles into roll number section and question sections.
-
-    Args:
-        bubbles: All detected bubbles sorted
-        sheet: Sheet layout configuration
-        layout: Bubble layout configuration (for spacing expectations)
-
-    Returns:
-        (roll_number_groups, question_groups) where each group is a list of bubbles
-    """
-    if not bubbles:
-        return [], []
-
-    # Group all bubbles by rows first (same y-coordinate within tolerance)
-    bubbles_sorted = sorted(bubbles, key=lambda b: (b.y, b.x))
-    rows = []
-    current_row = []
-
-    for bubble in bubbles_sorted:
-        if not current_row or abs(bubble.y - current_row[0].y) < 15:
-            current_row.append(bubble)
-        else:
-            if current_row:
-                rows.append(sorted(current_row, key=lambda b: b.x))
-            current_row = [bubble]
-    if current_row:
-        rows.append(sorted(current_row, key=lambda b: b.x))
-
-    # Process all rows
-    roll_bubbles = []
-    all_question_bubbles = []  # Collect all question bubbles with position info
-
-    for i, row in enumerate(rows):
-        if i < sheet.roll_rows:
-            # First 10 rows: extract roll numbers (first 3) and questions (rest)
-            if len(row) >= sheet.roll_columns:
-                roll_bubbles.append(row[:sheet.roll_columns])
-                # Remaining bubbles in this row are questions
-                question_bubbles_in_row = row[sheet.roll_columns:]
-            else:
-                question_bubbles_in_row = row
-        else:
-            # Rows 10+: all bubbles are questions
-            question_bubbles_in_row = row
-
-        # Group question bubbles in this row into sets of 4
-        for j in range(0, len(question_bubbles_in_row) - sheet.question_options + 1, sheet.question_options):
-            group = question_bubbles_in_row[j:j + sheet.question_options]
-            if len(group) == sheet.question_options:
-                # Verify spacing is consistent (they're part of same question)
-                gaps = [group[k+1].x - group[k].x for k in range(len(group)-1)]
-                avg_gap = sum(gaps) / len(gaps) if gaps else 0
-                # If gaps are relatively uniform, it's a valid question group
-                if all(abs(gap - avg_gap) < 30 for gap in gaps):
-                    # Store with average x position for column sorting
-                    avg_x = sum(b.x for b in group) / len(group)
-                    all_question_bubbles.append((avg_x, group[0].y, group))
-
-    # Group questions into discrete columns by clustering x-coordinates
-    if not all_question_bubbles:
-        return roll_bubbles, []
-
-    # Sort by x-coordinate to identify columns
-    sorted_by_x = sorted(all_question_bubbles, key=lambda item: item[0])
-
-    # Cluster into columns using the configured column width for tolerance
-    column_width = layout.group_width(sheet.question_options)
-    column_tolerance = column_width / 2
-    columns = []
-    current_column = [sorted_by_x[0]]
-
-    for item in sorted_by_x[1:]:
-        if item[0] - current_column[0][0] < column_tolerance:  # Same column
-            current_column.append(item)
-        else:  # New column
-            columns.append(current_column)
-            current_column = [item]
-    columns.append(current_column)
-
-    # Sort each column by y-coordinate (top to bottom), then concatenate
-    question_groups = []
-    for column in columns:
-        # Sort by y within this column
-        column_sorted = sorted(column, key=lambda item: item[1])
-        question_groups.extend([item[2] for item in column_sorted])
-
-    return roll_bubbles, question_groups
-
-
 def overlay_labels(image: np.ndarray, roll_groups: List[List[Bubble]],
                    question_groups: List[List[Bubble]], sheet: SheetLayout) -> np.ndarray:
     """Overlay question numbers and option labels on bubbles.
@@ -339,8 +336,8 @@ def overlay_labels(image: np.ndarray, roll_groups: List[List[Bubble]],
             text_y = bubble.y + text_size[1] // 2
             cv2.putText(output, text, (text_x, text_y), font, font_scale, (255, 0, 0), thickness)
 
-    # Third pass: Label questions (A, B, C, D)
-    option_labels = ['A', 'B', 'C', 'D']
+    # Third pass: Label questions (A, B, C, ...)
+    option_labels = [chr(ord('A') + idx) for idx in range(sheet.question_options)]
     for q_idx, question_bubbles in enumerate(question_groups):
         question_num = q_idx + 1
 
@@ -372,8 +369,14 @@ def overlay_labels(image: np.ndarray, roll_groups: List[List[Bubble]],
     return output
 
 
-def process_omr_sheet(input_path: Path, output_path: Path,
-                      geom: PageGeometry, layout: BubbleLayout, sheet: SheetLayout) -> bool:
+def process_omr_sheet(
+    input_path: Path,
+    output_path: Path,
+    geom: PageGeometry,
+    layout: BubbleLayout,
+    sheet: SheetLayout,
+    metadata: Dict[str, Any],
+) -> bool:
     """Process a single OMR sheet image.
 
     Args:
@@ -406,17 +409,18 @@ def process_omr_sheet(input_path: Path, output_path: Path,
     corrected = correct_skew(image, markers, geom)
     print("Applied perspective correction")
 
-    # Detect bubbles
-    bubbles = detect_bubbles(corrected, layout)
-    print(f"Detected {len(bubbles)} bubbles")
+    # Evaluate predefined bubble locations from metadata
+    roll_groups, question_groups = sample_bubbles_from_metadata(corrected, metadata, geom, layout, sheet)
+    total_roll_bubbles = sum(len(group) for group in roll_groups)
+    total_questions = len(question_groups)
+    print(
+        f"Evaluated {total_roll_bubbles} roll bubbles "
+        f"and {total_questions} questions using metadata"
+    )
 
-    if not bubbles:
-        print("No bubbles detected")
+    if total_roll_bubbles == 0 and total_questions == 0:
+        print("No bubble samples evaluated")
         return False
-
-    # Group bubbles
-    roll_groups, question_groups = group_bubbles_into_questions(bubbles, sheet, layout)
-    print(f"Found {len(roll_groups)} roll number rows and {len(question_groups)} questions")
 
     # Overlay labels
     labeled = overlay_labels(corrected, roll_groups, question_groups, sheet)
@@ -443,6 +447,15 @@ def main():
         print(f"Directory {sheets_dir} not found")
         return
 
+    metadata_candidates = sorted(sheets_dir.glob("*.json"))
+    if not metadata_candidates:
+        print(f"No metadata JSON file found in {sheets_dir}")
+        return
+
+    metadata_path = metadata_candidates[0]
+    print(f"Loading bubble metadata from {metadata_path.name}")
+    metadata = load_bubble_metadata(metadata_path)
+
     # Find image files (png, jpg, jpeg)
     image_files = list(sheets_dir.glob("*.png")) + \
                   list(sheets_dir.glob("*.jpg")) + \
@@ -456,7 +469,7 @@ def main():
 
     for image_file in image_files:
         output_file = processed_dir / f"processed_{image_file.name}"
-        success = process_omr_sheet(image_file, output_file, geom, layout, sheet)
+        success = process_omr_sheet(image_file, output_file, geom, layout, sheet, metadata)
         print()
 
 

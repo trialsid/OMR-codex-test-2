@@ -10,9 +10,10 @@ The resulting PDF is saved inside the ``sheets/`` directory.
 """
 from __future__ import annotations
 
+import json
 from io import BytesIO
 from pathlib import Path
-from typing import Iterable, List
+from typing import Any, Dict, Iterable, List, cast
 
 from omr_config import PageGeometry, BubbleLayout, MarkerConfig, SheetLayout
 
@@ -100,7 +101,13 @@ def draw_grid_markers(content: PDFContent, geom: PageGeometry, markers: MarkerCo
             content.fill_rect(x, y, markers.grid_marker_size, markers.grid_marker_size)
 
 
-def draw_roll_number_section(content: PDFContent, geom: PageGeometry, layout: BubbleLayout, sheet: SheetLayout) -> tuple[float, float, float]:
+def draw_roll_number_section(
+    content: PDFContent,
+    geom: PageGeometry,
+    layout: BubbleLayout,
+    sheet: SheetLayout,
+    metadata: Dict[str, Any],
+) -> tuple[float, float, float]:
     bubble_span = sheet.roll_columns * layout.diameter
     bubble_span += (sheet.roll_columns - 1) * layout.option_gap
     area_width = layout.label_column_width + layout.column_padding + bubble_span
@@ -114,6 +121,8 @@ def draw_roll_number_section(content: PDFContent, geom: PageGeometry, layout: Bu
 
     content.set_line_width(1)
     content.set_stroke_color(0, 0, 0)
+    roll_entries: List[Dict[str, Any]] = cast(List[Dict[str, Any]], metadata.setdefault("roll_bubbles", []))
+
     for row in range(sheet.roll_rows):
         y = top_y - (row + 1) * layout.vertical_gap
         digit_x = geom.margin + layout.label_column_width - layout.radius
@@ -122,6 +131,18 @@ def draw_roll_number_section(content: PDFContent, geom: PageGeometry, layout: Bu
         for col in range(sheet.roll_columns):
             x = x_start + col * (layout.diameter + layout.option_gap)
             content.stroke_circle(x, y, layout.radius)
+            roll_entries.append(
+                {
+                    "row": row,
+                    "column": col,
+                    "digit": row % 10,
+                    "center": {
+                        "x": x / geom.width,
+                        "y": y / geom.height,
+                    },
+                    "radius": layout.radius / geom.width,
+                }
+            )
 
     # Calculate bottom of roll number section
     bottom_y = top_y - sheet.roll_rows * layout.vertical_gap - layout.radius
@@ -137,11 +158,13 @@ def draw_question_columns(
     x_start: float,
     sheet: SheetLayout,
     roll_bottom: float,
+    metadata: Dict[str, Any],
 ) -> None:
     options = sheet.question_options
     column_width = layout.group_width(options)
     available_width = geom.width - geom.margin - x_start
     columns = max(1, int(available_width // column_width))
+    question_entries: List[Dict[str, Any]] = cast(List[Dict[str, Any]], metadata.setdefault("question_bubbles", []))
 
     # Determine all candidate row centers, trimming anything that would spill past the margin
     row_centers: List[float] = []
@@ -186,9 +209,22 @@ def draw_question_columns(
         for y in row_centers[start_row:]:
             label_y = y - layout.radius / 2
             content.draw_text(label_column_x, label_y, str(question_number))
+            current_question = question_number
             for opt in range(options):
                 x = x_base + layout.radius + opt * (layout.diameter + layout.option_gap)
                 content.stroke_circle(x, y, layout.radius)
+                question_entries.append(
+                    {
+                        "question": current_question,
+                        "option_index": opt,
+                        "column": col,
+                        "center": {
+                            "x": x / geom.width,
+                            "y": y / geom.height,
+                        },
+                        "radius": layout.radius / geom.width,
+                    }
+                )
             question_number += 1
 
 
@@ -244,14 +280,28 @@ def generate_omr_sheet(output_path: Path) -> None:
     ensure_output_directory(output_path.parent)
     content = PDFContent()
 
+    metadata: Dict[str, Any] = {
+        "page": {
+            "width": geom.width,
+            "height": geom.height,
+            "margin": geom.margin,
+        },
+        "layout": {
+            "question_options": sheet.question_options,
+        },
+    }
+
     draw_anchor_markers(content, geom, markers)
     draw_grid_markers(content, geom, markers)
-    roll_top, _, roll_bottom = draw_roll_number_section(content, geom, layout, sheet)
+    roll_top, _, roll_bottom = draw_roll_number_section(content, geom, layout, sheet, metadata)
     # Begin the first question column directly beneath the roll number section.
     question_x_start = geom.margin
-    draw_question_columns(content, geom, layout, roll_top, question_x_start, sheet, roll_bottom)
+    draw_question_columns(content, geom, layout, roll_top, question_x_start, sheet, roll_bottom, metadata)
 
     build_pdf(geom.width, geom.height, content.render(), output_path)
+
+    metadata_path = output_path.with_suffix(".json")
+    metadata_path.write_text(json.dumps(metadata, indent=2))
 
 
 def _escape_pdf_text(text: str) -> str:
