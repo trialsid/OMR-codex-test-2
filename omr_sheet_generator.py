@@ -123,12 +123,18 @@ def draw_roll_number_section(
     content.set_line_width(1)
     content.set_stroke_color(0, 0, 0)
 
+    # Constants for text sizing (Helvetica at size 12)
+    digit_width = 6.5  # Approximate width of one digit in points
+    gap_before_bubble = 5  # Minimum gap between label end and bubble edge
+
     # Group bubbles by row for digit label placement
     rows_seen = set()
     for bubble in bubbles:
-        # Draw digit label (once per row)
+        # Draw digit label (once per row, right-aligned)
         if bubble.row is not None and bubble.row not in rows_seen:
-            digit_x = geom.margin + layout.label_column_width - layout.radius
+            # Right-align single digit (0-9)
+            label_end_x = geom.margin + layout.label_column_width - gap_before_bubble
+            digit_x = label_end_x - digit_width
             digit_y = bubble.y - layout.radius / 2
             content.draw_text(digit_x, digit_y, str(bubble.digit))
             rows_seen.add(bubble.row)
@@ -156,15 +162,46 @@ def draw_question_columns(
     content.set_line_width(1)
     content.set_stroke_color(0, 0, 0)
 
+    # First pass: find max question number per column
+    max_question_per_column = {}
+    for bubble in bubbles:
+        if bubble.question is not None and bubble.question_column is not None:
+            col = bubble.question_column
+            max_question_per_column[col] = max(
+                max_question_per_column.get(col, 0),
+                bubble.question
+            )
+
+    # Calculate max digits needed per column
+    max_digits_per_column = {}
+    for col, max_q in max_question_per_column.items():
+        max_digits_per_column[col] = len(str(max_q))
+
+    # Constants for text sizing (Helvetica at size 12)
+    digit_width = 6.5  # Approximate width of one digit in points
+    gap_before_bubble = 5  # Minimum gap between label end and bubble edge
+
     # Group bubbles by question for label placement
     questions_seen = set()
     for bubble in bubbles:
         # Draw question number label (once per question, on first option)
         if bubble.question is not None and bubble.option_index == 0:
             if bubble.question not in questions_seen:
-                # Calculate label position based on column
+                # Calculate label position based on column, right-aligned
                 column_origin = geom.margin + (bubble.question_column or 0) * layout.group_width(sheet.question_options)
-                label_x = column_origin + layout.label_column_width - layout.radius
+
+                # Determine max digits for this column
+                max_digits = max_digits_per_column.get(bubble.question_column, 1)
+
+                # Calculate right-aligned position
+                # End of label area (before gap and bubbles)
+                label_end_x = column_origin + layout.label_column_width - gap_before_bubble
+                # Width of max-digit number in this column
+                max_text_width = max_digits * digit_width
+                # Start position for this specific label (right-aligned within max width)
+                current_text_width = len(str(bubble.question)) * digit_width
+                label_x = label_end_x - current_text_width
+
                 label_y = bubble.y - layout.radius / 2
                 content.draw_text(label_x, label_y, str(bubble.question))
                 questions_seen.add(bubble.question)

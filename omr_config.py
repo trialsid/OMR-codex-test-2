@@ -25,10 +25,10 @@ class PageGeometry:
 @dataclass(frozen=True)
 class BubbleLayout:
     """Bubble dimensions and spacing."""
-    radius: float = 8
-    vertical_gap: float = 26
-    option_gap: float = 12
-    column_padding: float = 24
+    radius: float = 6.5
+    vertical_gap: float = 19
+    option_gap: float = 9
+    column_padding: float = 18
     label_column_width: float = 28
     fill_threshold: float = 0.4  # Minimum darkness ratio to consider bubble filled
 
