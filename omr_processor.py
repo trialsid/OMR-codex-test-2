@@ -15,6 +15,7 @@ import cv2
 import numpy as np
 from dataclasses import dataclass
 from pathlib import Path
+from collections import defaultdict
 from typing import List, Optional, Tuple
 
 from omr_config import PageGeometry, BubbleLayout, MarkerConfig, SheetLayout
@@ -112,6 +113,58 @@ def correct_skew(image: np.ndarray, markers: List[Tuple[int, int]], geom: PageGe
 
 
 
+def _refine_bubble_center(
+    gray: np.ndarray,
+    inner_x: int,
+    inner_y: int,
+    radius: int,
+) -> Optional[Tuple[float, float, float]]:
+    """Attempt to refine the bubble center using image moments."""
+
+    if radius <= 0:
+        return None
+
+    search_radius = max(radius * 2, 8)
+    x0 = max(inner_x - search_radius, 0)
+    y0 = max(inner_y - search_radius, 0)
+    x1 = min(inner_x + search_radius + 1, gray.shape[1])
+    y1 = min(inner_y + search_radius + 1, gray.shape[0])
+
+    if x1 <= x0 or y1 <= y0:
+        return None
+
+    roi = gray[y0:y1, x0:x1]
+    if roi.size == 0:
+        return None
+
+    blurred = cv2.GaussianBlur(roi, (3, 3), 0)
+    _, thresh = cv2.threshold(
+        blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
+    )
+
+    dark_pixels = cv2.countNonZero(thresh)
+    if dark_pixels == 0:
+        return None
+
+    # Require a minimum fraction of the expected circle area to reduce noise
+    expected_area = np.pi * (radius ** 2)
+    if dark_pixels < expected_area * 0.1:
+        return None
+
+    moments = cv2.moments(thresh)
+    if moments["m00"] == 0:
+        return None
+
+    cx = moments["m10"] / moments["m00"]
+    cy = moments["m01"] / moments["m00"]
+
+    refined_inner_x = x0 + cx
+    refined_inner_y = y0 + cy
+    refined_radius = max(1.0, np.sqrt(dark_pixels / np.pi))
+
+    return refined_inner_x, refined_inner_y, refined_radius
+
+
 def _coordinate_to_bubble(
     coord: BubbleCoordinate,
     geom: PageGeometry,
@@ -122,7 +175,7 @@ def _coordinate_to_bubble(
     margin_y: int,
     inner_gray: np.ndarray,
     layout: BubbleLayout,
-) -> Optional[Bubble]:
+    ) -> Optional[Tuple[Bubble, Optional[Tuple[float, float]]]]:
     """Convert a PDF coordinate to pixel coordinates and sample fill state."""
     # Calculate transformation from PDF to pixel space
     anchor_inset_x = geom.margin / 2.0 + markers.anchor_size / 2.0
@@ -174,13 +227,26 @@ def _coordinate_to_bubble(
         layout.fill_threshold,
     )
 
-    return Bubble(
+    bubble = Bubble(
         x=abs_x,
         y=abs_y,
         radius=radius,
         is_filled=is_filled,
         fill_intensity=intensity,
     )
+
+    refinement = _refine_bubble_center(inner_gray, inner_x, inner_y, radius)
+    offset: Optional[Tuple[float, float]] = None
+    if refinement is not None:
+        refined_inner_x, refined_inner_y, refined_radius = refinement
+        refined_abs_x = refined_inner_x + margin_x
+        refined_abs_y = refined_inner_y + margin_y
+        offset = (refined_abs_x - abs_x, refined_abs_y - abs_y)
+        bubble.x = int(round(refined_abs_x))
+        bubble.y = int(round(refined_abs_y))
+        bubble.radius = max(1, int(round(refined_radius)))
+
+    return bubble, offset
 
 
 def sample_bubbles_from_coordinates(
@@ -222,14 +288,38 @@ def sample_bubbles_from_coordinates(
     if inner_gray.size == 0:
         return [[] for _ in range(sheet.roll_rows)], []
 
+    def _median_offset(offsets: List[Tuple[float, float]]) -> Tuple[float, float]:
+        if not offsets:
+            return 0.0, 0.0
+        arr = np.array(offsets, dtype=float)
+        return float(np.median(arr[:, 0])), float(np.median(arr[:, 1]))
+
     # Process roll bubbles
     roll_groups: List[List[Bubble]] = [[] for _ in range(sheet.roll_rows)]
+    roll_offsets = defaultdict(list)
+    roll_results: List[Tuple[BubbleCoordinate, Bubble, Optional[Tuple[float, float]]]] = []
     for coord in roll_coords:
-        bubble = _coordinate_to_bubble(
+        result = _coordinate_to_bubble(
             coord, geom, markers, width, height, margin_x, margin_y, inner_gray, layout
         )
-        if bubble is not None and coord.row is not None:
-            roll_groups[coord.row].append(bubble)
+        if result is None or coord.row is None:
+            continue
+        bubble, offset = result
+        roll_results.append((coord, bubble, offset))
+        if offset is not None:
+            roll_offsets[coord.row].append(offset)
+
+    roll_offset_cache = {
+        row: _median_offset(offsets) for row, offsets in roll_offsets.items() if offsets
+    }
+
+    for coord, bubble, offset in roll_results:
+        if offset is None:
+            cached = roll_offset_cache.get(coord.row)
+            if cached is not None:
+                bubble.x = int(round(bubble.x + cached[0]))
+                bubble.y = int(round(bubble.y + cached[1]))
+        roll_groups[coord.row].append(bubble)
 
     for group in roll_groups:
         group.sort(key=lambda b: b.x)
@@ -237,13 +327,52 @@ def sample_bubbles_from_coordinates(
     # Process question bubbles
     question_groups: List[List[Bubble]] = []
     question_map: dict[int, List[tuple[int, Bubble]]] = {}
+    question_offsets_by_question = defaultdict(list)
+    question_offsets_by_column = defaultdict(list)
+    question_results: List[
+        Tuple[BubbleCoordinate, Bubble, Optional[Tuple[float, float]]]
+    ] = []
 
     for coord in question_coords:
-        bubble = _coordinate_to_bubble(
+        result = _coordinate_to_bubble(
             coord, geom, markers, width, height, margin_x, margin_y, inner_gray, layout
         )
-        if bubble is not None and coord.question is not None and coord.option_index is not None:
-            question_map.setdefault(coord.question, []).append((coord.option_index, bubble))
+        if (
+            result is None
+            or coord.question is None
+            or coord.option_index is None
+        ):
+            continue
+        bubble, offset = result
+        question_results.append((coord, bubble, offset))
+        if offset is not None:
+            question_offsets_by_question[coord.question].append(offset)
+            if coord.question_column is not None:
+                question_offsets_by_column[coord.question_column].append(offset)
+        question_map.setdefault(coord.question, []).append((coord.option_index, bubble))
+
+    question_offset_cache = {
+        key: _median_offset(offsets)
+        for key, offsets in question_offsets_by_question.items()
+        if offsets
+    }
+    question_column_cache = {
+        key: _median_offset(offsets)
+        for key, offsets in question_offsets_by_column.items()
+        if offsets
+    }
+
+    # Apply cached offsets to bubbles without a reliable refinement
+    for coord, bubble, offset in question_results:
+        if offset is None:
+            cached = None
+            if coord.question is not None:
+                cached = question_offset_cache.get(coord.question)
+            if cached is None and coord.question_column is not None:
+                cached = question_column_cache.get(coord.question_column)
+            if cached is not None:
+                bubble.x = int(round(bubble.x + cached[0]))
+                bubble.y = int(round(bubble.y + cached[1]))
 
     for question_number in sorted(question_map):
         ordered = sorted(question_map[question_number], key=lambda item: item[0])
