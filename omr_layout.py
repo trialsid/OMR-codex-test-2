@@ -48,7 +48,8 @@ def generate_roll_bubble_coordinates(
 
     bubbles = []
     for row in range(sheet.roll_rows):
-        y = top_y - (row + 1) * layout.vertical_gap
+        # Shift bubbles down by one row to make space for label in row 0
+        y = top_y - (row + 2) * layout.vertical_gap
         for col in range(sheet.roll_columns):
             x = x_start + col * (layout.diameter + layout.option_gap)
             bubbles.append(BubbleCoordinate(
@@ -60,7 +61,8 @@ def generate_roll_bubble_coordinates(
                 digit=row % 10,
             ))
 
-    bottom_y = top_y - sheet.roll_rows * layout.vertical_gap - layout.radius
+    # Adjust bottom_y to account for the extra row used by the label
+    bottom_y = top_y - (sheet.roll_rows + 1) * layout.vertical_gap - layout.radius
     return bubbles, top_y, area_width, bottom_y
 
 
@@ -140,12 +142,13 @@ def calculate_roll_label_position(
     Returns:
         (x, y) coordinates for the label
     """
-    left_padding = layout.column_padding / 2
-    label_x = geom.margin + layout.label_column_width + left_padding
+    # Position label horizontally to match Questions label positioning
+    label_x = geom.margin + layout.label_column_width + layout.column_padding / 2
 
-    # Label sits above the first bubble row
+    # Label occupies the first row in the grid (row 0)
+    # Position at row center Y coordinate (matching Questions label positioning)
     top_y = geom.height - geom.margin - layout.diameter
-    label_y = top_y + layout.radius / 2
+    label_y = top_y - layout.vertical_gap
 
     return label_x, label_y
 
@@ -162,7 +165,8 @@ def calculate_questions_label_position(
     """
     # Recalculate the geometry to find the label row
     top_y = geom.height - geom.margin - layout.diameter
-    roll_bottom = top_y - sheet.roll_rows * layout.vertical_gap - layout.radius
+    # Account for the extra row used by the Roll Number label
+    roll_bottom = top_y - (sheet.roll_rows + 1) * layout.vertical_gap - layout.radius
 
     # Generate row centers for questions
     row_centers: List[float] = []
