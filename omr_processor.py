@@ -265,9 +265,27 @@ def analyze_bubble_fill(gray: np.ndarray, x: int, y: int, radius: int, threshold
     """
     h, w = gray.shape
 
-    # Create masks for interior and background ring
-    y_grid, x_grid = np.ogrid[:h, :w]
-    distance_from_center = np.sqrt((x_grid - x)**2 + (y_grid - y)**2)
+    # Extract local region around bubble (optimization: only process nearby pixels)
+    # Region size: enough to include background ring
+    region_size = int(radius * 2.0) + 1
+    x_min = max(0, x - region_size)
+    x_max = min(w, x + region_size + 1)
+    y_min = max(0, y - region_size)
+    y_max = min(h, y + region_size + 1)
+
+    # Extract local region
+    local_region = gray[y_min:y_max, x_min:x_max]
+    if local_region.size == 0:
+        return False, 0.0
+
+    # Adjust center coordinates to local region
+    local_x = x - x_min
+    local_y = y - y_min
+
+    # Create masks for interior and background ring (only for local region)
+    local_h, local_w = local_region.shape
+    y_grid, x_grid = np.ogrid[:local_h, :local_w]
+    distance_from_center = np.sqrt((x_grid - local_x)**2 + (y_grid - local_y)**2)
 
     # Interior: pixels inside radius * 0.7 (avoid edge artifacts)
     interior_mask = distance_from_center <= (radius * 0.7)
@@ -278,8 +296,8 @@ def analyze_bubble_fill(gray: np.ndarray, x: int, y: int, radius: int, threshold
     background_mask = (distance_from_center >= ring_inner_radius) & (distance_from_center <= ring_outer_radius)
 
     # Calculate mean intensity (lower = darker = more filled)
-    interior_pixels = gray[interior_mask]
-    background_pixels = gray[background_mask]
+    interior_pixels = local_region[interior_mask]
+    background_pixels = local_region[background_mask]
 
     if len(interior_pixels) == 0 or len(background_pixels) == 0:
         return False, 0.0
