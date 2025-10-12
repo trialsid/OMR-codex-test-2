@@ -5,11 +5,15 @@ __pycache__/
 *.so
 .Python
 
-# Generated OMR sheets
-sheets/
+# Generated OMR sheets (except omr_sheet.png)
+sheets/*
+!sheets/omr_sheet.png
 
 # Processed OMR sheets
 processed/
+
+# Distortion test outputs
+distortion_tests/
 
 # Virtual environments
 venv/
