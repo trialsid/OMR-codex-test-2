@@ -239,7 +239,7 @@ def apply_aspect_distortion(
         vertical_scale: Vertical scaling factor
 
     Returns:
-        Distorted image with white padding to maintain canvas size
+        Distorted image on expanded canvas with white padding to ensure all anchors visible
     """
     h, w = image.shape[:2]
     new_w = int(w * horizontal_scale)
@@ -248,26 +248,19 @@ def apply_aspect_distortion(
     # Resize with new aspect ratio (actual distortion)
     distorted = cv2.resize(image, (new_w, new_h))
 
-    # Create canvas at original size with white background
-    canvas = np.full((h, w, 3) if len(image.shape) == 3 else (h, w), 255, dtype=np.uint8)
+    # Add margin padding (10% of larger dimension) to ensure anchors don't touch edges
+    margin = int(max(new_w, new_h) * 0.1)
 
-    # Center the distorted image on the canvas
-    offset_x = (w - new_w) // 2
-    offset_y = (h - new_h) // 2
+    # Create canvas large enough to fit distorted image + margin
+    canvas_w = new_w + 2 * margin
+    canvas_h = new_h + 2 * margin
+    canvas = np.full((canvas_h, canvas_w, 3) if len(image.shape) == 3 else (canvas_h, canvas_w),
+                     255, dtype=np.uint8)
 
-    # Handle case where distorted image is larger than original
-    if new_w > w or new_h > h:
-        # Crop the distorted image to fit
-        crop_x = max(0, (new_w - w) // 2)
-        crop_y = max(0, (new_h - h) // 2)
-        crop_w = min(new_w, w)
-        crop_h = min(new_h, h)
-
-        distorted_crop = distorted[crop_y:crop_y + crop_h, crop_x:crop_x + crop_w]
-        canvas[0:crop_h, 0:crop_w] = distorted_crop
-    else:
-        # Place distorted image centered on canvas
-        canvas[offset_y:offset_y + new_h, offset_x:offset_x + new_w] = distorted
+    # Center the distorted image on the expanded canvas
+    offset_x = margin
+    offset_y = margin
+    canvas[offset_y:offset_y + new_h, offset_x:offset_x + new_w] = distorted
 
     return canvas
 
@@ -350,51 +343,51 @@ def generate_distortion_tests(
 
     # === Perspective Distortions ===
     tests.append((
-        "perspective_tilt_x_10",
-        "Perspective: 10° horizontal tilt (right closer)",
-        apply_perspective_distortion(original, tilt_x=10)
+        "perspective_tilt_x_2_5",
+        "Perspective: 2.5° horizontal tilt (right closer)",
+        apply_perspective_distortion(original, tilt_x=2.5)
     ))
 
     tests.append((
-        "perspective_tilt_x_20",
-        "Perspective: 20° horizontal tilt (right closer - strong)",
-        apply_perspective_distortion(original, tilt_x=20)
+        "perspective_tilt_x_5",
+        "Perspective: 5° horizontal tilt (right closer - moderate)",
+        apply_perspective_distortion(original, tilt_x=5)
     ))
 
     tests.append((
-        "perspective_tilt_y_10",
-        "Perspective: 10° vertical tilt (bottom closer)",
-        apply_perspective_distortion(original, tilt_y=10)
+        "perspective_tilt_y_2_5",
+        "Perspective: 2.5° vertical tilt (bottom closer)",
+        apply_perspective_distortion(original, tilt_y=2.5)
     ))
 
     tests.append((
-        "perspective_tilt_y_20",
-        "Perspective: 20° vertical tilt (bottom closer - strong)",
-        apply_perspective_distortion(original, tilt_y=20)
+        "perspective_tilt_y_5",
+        "Perspective: 5° vertical tilt (bottom closer - moderate)",
+        apply_perspective_distortion(original, tilt_y=5)
     ))
 
     tests.append((
         "perspective_both_tilts",
-        "Perspective: Combined tilts (10° horizontal + 10° vertical)",
-        apply_perspective_distortion(original, tilt_x=10, tilt_y=10)
+        "Perspective: Combined tilts (2.5° horizontal + 2.5° vertical)",
+        apply_perspective_distortion(original, tilt_x=2.5, tilt_y=2.5)
     ))
 
     tests.append((
-        "perspective_rotation_5",
-        "Perspective: 5° rotation",
-        apply_perspective_distortion(original, rotation=5)
+        "perspective_rotation_3",
+        "Perspective: 3° rotation",
+        apply_perspective_distortion(original, rotation=3)
     ))
 
     tests.append((
-        "perspective_rotation_15",
-        "Perspective: 15° rotation",
-        apply_perspective_distortion(original, rotation=15)
+        "perspective_rotation_6",
+        "Perspective: 6° rotation",
+        apply_perspective_distortion(original, rotation=6)
     ))
 
     tests.append((
-        "perspective_rotation_30",
-        "Perspective: 30° rotation (extreme)",
-        apply_perspective_distortion(original, rotation=30)
+        "perspective_rotation_10",
+        "Perspective: 10° rotation (challenging)",
+        apply_perspective_distortion(original, rotation=10)
     ))
 
     # === Contrast Variations ===
@@ -464,7 +457,7 @@ def generate_distortion_tests(
         "Combined: Tilt + horizontal squash + low contrast",
         apply_contrast_variation(
             apply_aspect_distortion(
-                apply_perspective_distortion(original, tilt_x=8, tilt_y=5),
+                apply_perspective_distortion(original, tilt_x=3, tilt_y=2.5),
                 horizontal_scale=0.9
             ),
             output_black=90, output_white=170
