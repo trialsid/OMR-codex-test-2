@@ -43,6 +43,7 @@ class DistortionResult:
     question_bubbles: int = 0
     processing_time_ms: float = 0.0
     variation_path: str = ""
+    anchor_viz_path: str = ""
     processed_path: str = ""
 
 
@@ -242,21 +243,35 @@ def process_distorted_image(
     layout: BubbleLayout,
     sheet: SheetLayout,
     markers_cfg: MarkerConfig,
-) -> Tuple[bool, str, int, int, int, Optional[np.ndarray]]:
+) -> Tuple[bool, str, int, int, int, Optional[np.ndarray], Optional[np.ndarray]]:
     """Process a distorted image and return results.
 
     Returns:
-        (success, error_message, anchors_detected, roll_bubbles, questions, processed_image)
+        (success, error_message, anchors_detected, roll_bubbles, questions, processed_image, anchor_viz)
     """
     try:
         # Detect anchor markers
         anchor_points = detect_anchor_markers(image)
+
+        # Create anchor visualization
+        anchor_viz = image.copy()
+        if anchor_points is not None and len(anchor_points) > 0:
+            # Draw detected anchors
+            for idx, (x, y) in enumerate(anchor_points):
+                cv2.circle(anchor_viz, (x, y), 20, (0, 255, 0), 3)
+                cv2.circle(anchor_viz, (x, y), 5, (0, 255, 0), -1)
+                # Label corners
+                labels = ["TL", "TR", "BL", "BR"]
+                if idx < len(labels):
+                    cv2.putText(anchor_viz, labels[idx], (x + 25, y - 10),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+
         if anchor_points is None:
-            return False, "Failed to detect anchor markers", 0, 0, 0, None
+            return False, "Failed to detect anchor markers", 0, 0, 0, None, anchor_viz
 
         anchors_detected = len(anchor_points)
         if anchors_detected != 4:
-            return False, f"Only detected {anchors_detected}/4 anchors", anchors_detected, 0, 0, None
+            return False, f"Only detected {anchors_detected}/4 anchors", anchors_detected, 0, 0, None, anchor_viz
 
         # Correct skew
         corrected = correct_skew(image, anchor_points, geom)
@@ -272,10 +287,11 @@ def process_distorted_image(
         # Overlay labels
         labeled = overlay_labels(corrected, roll_groups, question_groups, sheet)
 
-        return True, "", anchors_detected, roll_bubbles, questions, labeled
+        return True, "", anchors_detected, roll_bubbles, questions, labeled, anchor_viz
 
     except Exception as e:
-        return False, str(e), 0, 0, 0, None
+        anchor_viz = image.copy()
+        return False, str(e), 0, 0, 0, None, anchor_viz
 
 
 def generate_distortion_tests(
@@ -547,7 +563,7 @@ def generate_html_report(
         }}
         .images {{
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
             gap: 20px;
         }}
         .image-container {{
@@ -634,6 +650,10 @@ def generate_html_report(
                 <img src="{result.variation_path}" alt="Distorted Input">
                 <div class="image-label">Distorted Input</div>
             </div>
+            <div class="image-container">
+                <img src="{result.anchor_viz_path}" alt="Anchor Detection">
+                <div class="image-label">Anchor Detection</div>
+            </div>
 """
 
         if result.success and result.processed_path:
@@ -674,10 +694,12 @@ def main():
     input_image = Path("sheets") / "omr_sheet.png"
     output_dir = Path("distortion_tests")
     variations_dir = output_dir / "variations"
+    anchors_dir = output_dir / "anchors"
     processed_dir = output_dir / "processed"
 
     # Create output directories
     variations_dir.mkdir(parents=True, exist_ok=True)
+    anchors_dir.mkdir(parents=True, exist_ok=True)
     processed_dir.mkdir(parents=True, exist_ok=True)
 
     # Check input file
@@ -706,9 +728,15 @@ def main():
 
         # Process the distorted image
         start_time = time.perf_counter()
-        success, error_msg, anchors, roll_bubbles, questions, processed = \
+        success, error_msg, anchors, roll_bubbles, questions, processed, anchor_viz = \
             process_distorted_image(distorted_image, geom, layout, sheet, markers_cfg)
         processing_time_ms = (time.perf_counter() - start_time) * 1000
+
+        # Save anchor visualization
+        anchor_viz_path = anchors_dir / f"anchors_{name}.png"
+        if anchor_viz is not None:
+            cv2.imwrite(str(anchor_viz_path), anchor_viz)
+        anchor_viz_path_rel = f"anchors/anchors_{name}.png"
 
         # Save processed image if successful
         processed_path = ""
@@ -730,6 +758,7 @@ def main():
             question_bubbles=questions,
             processing_time_ms=processing_time_ms,
             variation_path=f"variations/{name}.png",
+            anchor_viz_path=anchor_viz_path_rel,
             processed_path=processed_path_rel
         )
         results.append(result)
