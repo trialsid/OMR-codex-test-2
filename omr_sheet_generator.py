@@ -83,15 +83,37 @@ class PDFContent:
 
 def draw_anchor_markers(content: PDFContent, geom: PageGeometry, markers: MarkerConfig) -> None:
     inset = geom.margin / 2
+    anchor_size = markers.anchor_size
+    inner_size = anchor_size * markers.anchor_inner_scale
+    dot_size = inner_size * markers.anchor_corner_dot_scale
+    inner_offset = (anchor_size - inner_size) / 2
+
     positions = [
-        (inset, geom.height - inset - markers.anchor_size),
-        (geom.width - inset - markers.anchor_size, geom.height - inset - markers.anchor_size),
-        (inset, inset),
-        (geom.width - inset - markers.anchor_size, inset),
+        ("top_left", inset, geom.height - inset - anchor_size),
+        ("top_right", geom.width - inset - anchor_size, geom.height - inset - anchor_size),
+        ("bottom_left", inset, inset),
+        ("bottom_right", geom.width - inset - anchor_size, inset),
     ]
-    content.set_fill_color(0, 0, 0)
-    for x, y in positions:
-        content.fill_rect(x, y, markers.anchor_size, markers.anchor_size)
+
+    for label, x, y in positions:
+        # Outer filled square
+        content.set_fill_color(0, 0, 0)
+        content.fill_rect(x, y, anchor_size, anchor_size)
+
+        # Inner white square that creates a high-contrast border
+        content.set_fill_color(1, 1, 1)
+        content.fill_rect(x + inner_offset, y + inner_offset, inner_size, inner_size)
+
+        # Corner dot encodes marker identity/orientation
+        content.set_fill_color(0, 0, 0)
+        dot_x = x + inner_offset
+        dot_y = y + inner_offset
+        if "right" in label:
+            dot_x += inner_size - dot_size
+        if "top" in label:
+            # PDF coordinate system has origin at bottom-left, so invert vertical labels
+            dot_y += inner_size - dot_size
+        content.fill_rect(dot_x, dot_y, dot_size, dot_size)
 
 
 def draw_grid_markers(content: PDFContent, geom: PageGeometry, markers: MarkerConfig) -> None:

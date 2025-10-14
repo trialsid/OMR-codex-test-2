@@ -49,6 +49,8 @@ class MarkerConfig:
     anchor_size: float = 18
     grid_marker_size: float = 6
     grid_spacing: float = 42
+    anchor_inner_scale: float = 0.55
+    anchor_corner_dot_scale: float = 0.22
 
 
 @dataclass(frozen=True)

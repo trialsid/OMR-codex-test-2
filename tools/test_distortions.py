@@ -279,7 +279,7 @@ def process_distorted_image(
     """
     try:
         # Detect anchor markers
-        anchor_points = detect_anchor_markers(image)
+        anchor_points = detect_anchor_markers(image, geom, markers_cfg)
 
         # Create anchor visualization
         anchor_viz = image.copy()
@@ -311,6 +311,17 @@ def process_distorted_image(
 
         roll_bubbles = sum(len(group) for group in roll_groups)
         questions = len(question_groups)
+
+        if roll_bubbles == 0 or questions == 0:
+            return (
+                False,
+                "Bubble sampling failed after anchor detection",
+                anchors_detected,
+                roll_bubbles,
+                questions,
+                None,
+                anchor_viz,
+            )
 
         # Overlay labels
         labeled = overlay_labels(corrected, roll_groups, question_groups, sheet)

@@ -11,11 +11,14 @@ The processed images are saved to the ``processed/`` directory.
 """
 from __future__ import annotations
 
+import itertools
+import math
+
 import cv2
 import numpy as np
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from omr_config import PageGeometry, BubbleLayout, MarkerConfig, SheetLayout
 from omr_layout import generate_all_bubble_coordinates, BubbleCoordinate
@@ -37,42 +40,165 @@ class Bubble:
         return self.x < other.x
 
 
-def detect_anchor_markers(image: np.ndarray) -> Optional[List[Tuple[int, int]]]:
+@dataclass
+class _AnchorCandidate:
+    center: Tuple[float, float]
+    area: float
+    rect: Tuple[Tuple[float, float], Tuple[float, float], float]
+    aspect_ratio: float
+    contour: np.ndarray
+    label: Optional[str]
+
+
+def detect_anchor_markers(
+    image: np.ndarray,
+    geom: PageGeometry,
+    markers: MarkerConfig,
+) -> Optional[List[Tuple[int, int]]]:
     """Detect the four corner anchor markers.
 
-    Returns:
-        List of (x, y) coordinates for [top-left, top-right, bottom-left, bottom-right]
-        or None if detection fails.
+    The detector looks for orientation-encoded fiducials printed at the page
+    corners. It evaluates multiple contour combinations, scoring them by
+    proximity to the image corners, geometric plausibility, and alignment with
+    the vertical grid marker columns. Candidate sets that do not reproduce the
+    expected grid spacing after rectification are rejected.
     """
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
-    _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY_INV)
 
-    # Find contours
-    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    # Filter for square-like contours
-    markers = []
-    for contour in contours:
-        area = cv2.contourArea(contour)
-        if area < 100 or area > 5000:  # Filter by area
-            continue
-
-        # Check if it's square-like
-        x, y, w, h = cv2.boundingRect(contour)
-        aspect_ratio = float(w) / h if h > 0 else 0
-        if 0.7 < aspect_ratio < 1.3:  # Approximately square
-            # Use center of bounding box
-            markers.append((x + w // 2, y + h // 2))
-
-    if len(markers) < 4:
+    if image is None or image.size == 0:
         return None
 
-    # Sort markers: top-left, top-right, bottom-left, bottom-right
-    markers = sorted(markers, key=lambda p: p[1])  # Sort by y
-    top_two = sorted(markers[:2], key=lambda p: p[0])  # Top row, sort by x
-    bottom_two = sorted(markers[-2:], key=lambda p: p[0])  # Bottom row, sort by x
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    _, binary = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
-    return [top_two[0], top_two[1], bottom_two[0], bottom_two[1]]
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None
+
+    height, width = gray.shape
+    diag = math.hypot(width, height)
+    image_area = float(width * height)
+
+    expected_anchor_w = (markers.anchor_size / geom.width) * width
+    expected_anchor_h = (markers.anchor_size / geom.height) * height
+    expected_anchor_area = max(expected_anchor_w * expected_anchor_h, image_area * 0.0005)
+
+    expected_grid_w = (markers.grid_marker_size / geom.width) * width
+    expected_grid_h = (markers.grid_marker_size / geom.height) * height
+    expected_grid_area = max(expected_grid_w * expected_grid_h, image_area * 0.00005)
+
+    anchor_candidates: List[_AnchorCandidate] = []
+    grid_candidates: Dict[str, List[Tuple[float, float]]] = {"left": [], "right": []}
+
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        if area <= 0:
+            continue
+
+        rect = cv2.minAreaRect(contour)
+        (cx, cy), (rw, rh), _ = rect
+        if rw <= 0 or rh <= 0:
+            continue
+
+        aspect_ratio = max(rw, rh) / max(min(rw, rh), 1e-6)
+
+        if expected_anchor_area * 0.35 <= area <= expected_anchor_area * 3.5 and aspect_ratio <= 3.0:
+            label = _decode_anchor_label(gray, rect)
+            anchor_candidates.append(
+                _AnchorCandidate(
+                    center=(cx, cy),
+                    area=area,
+                    rect=rect,
+                    aspect_ratio=aspect_ratio,
+                    contour=contour,
+                    label=label,
+                )
+            )
+        elif expected_grid_area * 0.4 <= area <= expected_grid_area * 5.0 and aspect_ratio <= 4.0:
+            if cx < width / 2:
+                grid_candidates["left"].append((cx, cy))
+            else:
+                grid_candidates["right"].append((cx, cy))
+
+    if len(anchor_candidates) < 4:
+        return None
+
+    # Keep top-N candidates closest to any corner to reduce combinatorics
+    corner_targets = {
+        "top_left": np.array([0.0, 0.0]),
+        "top_right": np.array([float(width - 1), 0.0]),
+        "bottom_left": np.array([0.0, float(height - 1)]),
+        "bottom_right": np.array([float(width - 1), float(height - 1)]),
+    }
+
+    def _min_corner_distance(candidate: _AnchorCandidate) -> float:
+        center = np.array(candidate.center)
+        return min(np.linalg.norm(center - target) for target in corner_targets.values())
+
+    anchor_candidates = sorted(anchor_candidates, key=_min_corner_distance)[:16]
+
+    best_assignment: Optional[Dict[str, _AnchorCandidate]] = None
+    best_score = float("inf")
+    corner_order = ["top_left", "top_right", "bottom_left", "bottom_right"]
+
+    for combo in itertools.combinations(anchor_candidates, 4):
+        cost_matrix = []
+        for corner_name in corner_order:
+            target = corner_targets[corner_name]
+            row = []
+            for candidate in combo:
+                center = np.array(candidate.center)
+                distance = np.linalg.norm(center - target)
+                distance_score = distance / diag
+                size_ratio = candidate.area / expected_anchor_area if expected_anchor_area > 0 else 1.0
+                size_penalty = abs(math.log(max(size_ratio, 1e-6))) * 0.2
+                aspect_penalty = max(0.0, candidate.aspect_ratio - 1.2) * 0.15
+                label_penalty = 0.0 if (candidate.label is None or candidate.label == corner_name) else 0.5
+                row.append(distance_score + size_penalty + aspect_penalty + label_penalty)
+            cost_matrix.append(row)
+
+        for perm in itertools.permutations(range(4)):
+            assignment = {corner_order[i]: combo[perm[i]] for i in range(4)}
+            ordered_points = [
+                np.array(assignment["top_left"].center),
+                np.array(assignment["top_right"].center),
+                np.array(assignment["bottom_left"].center),
+                np.array(assignment["bottom_right"].center),
+            ]
+
+            if not _quadrilateral_is_valid(ordered_points, width, height):
+                continue
+
+            base_score = sum(cost_matrix[i][perm[i]] for i in range(4))
+            shape_penalty = _quadrilateral_shape_penalty(ordered_points, geom)
+            grid_penalty = _grid_alignment_penalty(assignment, grid_candidates, diag)
+            total_score = base_score + shape_penalty + grid_penalty
+
+            if total_score < best_score:
+                best_score = total_score
+                best_assignment = assignment
+
+    if not best_assignment:
+        return None
+
+    ordered = [
+        best_assignment["top_left"].center,
+        best_assignment["top_right"].center,
+        best_assignment["bottom_left"].center,
+        best_assignment["bottom_right"].center,
+    ]
+
+    if not _validate_with_grid(gray, ordered, geom, markers):
+        return None
+
+    return [(int(round(x)), int(round(y))) for x, y in ordered]
+
+
+def _compute_output_dimensions(geom: PageGeometry) -> Tuple[int, int]:
+    aspect_ratio = geom.width / geom.height if geom.height else 1.0
+    output_height = 1400
+    output_width = max(1, int(round(output_height * aspect_ratio)))
+    return output_width, output_height
 
 
 def correct_skew(image: np.ndarray, markers: List[Tuple[int, int]], geom: PageGeometry) -> np.ndarray:
@@ -87,9 +213,7 @@ def correct_skew(image: np.ndarray, markers: List[Tuple[int, int]], geom: PageGe
         Corrected image
     """
     # Calculate output dimensions based on A4 aspect ratio
-    aspect_ratio = geom.width / geom.height
-    output_height = 1400  # Target height in pixels
-    output_width = int(output_height * aspect_ratio)
+    output_width, output_height = _compute_output_dimensions(geom)
 
     # Source points (detected markers)
     src_points = np.float32(markers)
@@ -109,6 +233,258 @@ def correct_skew(image: np.ndarray, markers: List[Tuple[int, int]], geom: PageGe
     corrected = cv2.warpPerspective(image, matrix, (output_width, output_height))
 
     return corrected
+
+
+def _decode_anchor_label(
+    gray: np.ndarray,
+    rect: Tuple[Tuple[float, float], Tuple[float, float], float],
+) -> Optional[str]:
+    (cx, cy), (rw, rh), angle = rect
+    if rw < 2 or rh < 2:
+        return None
+
+    width, height = rw, rh
+    rotation = angle
+    if width < height:
+        width, height = height, width
+        rotation += 90.0
+
+    rotation_matrix = cv2.getRotationMatrix2D((cx, cy), rotation, 1.0)
+    rotated = cv2.warpAffine(
+        gray,
+        rotation_matrix,
+        (gray.shape[1], gray.shape[0]),
+        flags=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_REPLICATE,
+    )
+
+    patch_size = (int(round(width)), int(round(height)))
+    if patch_size[0] < 2 or patch_size[1] < 2:
+        return None
+
+    patch = cv2.getRectSubPix(rotated, patch_size, (cx, cy))
+    if patch is None or patch.size == 0:
+        return None
+
+    norm_size = 64
+    patch = cv2.resize(patch, (norm_size, norm_size))
+    _, thresh = cv2.threshold(patch, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(thresh)
+    if num_labels < 3:
+        return None
+
+    areas = stats[1:, cv2.CC_STAT_AREA]
+    if areas.size == 0:
+        return None
+
+    largest_idx = 1 + int(np.argmax(areas))
+    outer_area = float(stats[largest_idx, cv2.CC_STAT_AREA])
+    dot_candidates = [
+        idx
+        for idx in range(1, num_labels)
+        if idx != largest_idx and 5 <= stats[idx, cv2.CC_STAT_AREA] <= outer_area * 0.35
+    ]
+    if not dot_candidates:
+        return None
+
+    dot_idx = max(dot_candidates, key=lambda idx: stats[idx, cv2.CC_STAT_AREA])
+    dot_cx, dot_cy = centroids[dot_idx]
+
+    half = norm_size / 2.0
+    horizontal = "left" if dot_cx < half else "right"
+    vertical = "top" if dot_cy < half else "bottom"
+    label = f"{vertical}_{horizontal}"
+    if label not in {"top_left", "top_right", "bottom_left", "bottom_right"}:
+        return None
+    return label
+
+
+def _quadrilateral_is_valid(
+    points: List[np.ndarray], width: int, height: int
+) -> bool:
+    for x, y in points:
+        if x < 0 or y < 0 or x >= width or y >= height:
+            return False
+
+    polygon = np.array(
+        [points[0], points[1], points[3], points[2]], dtype=np.float32
+    )  # TL, TR, BR, BL
+    area = cv2.contourArea(polygon)
+    if area < (width * height) * 0.05:
+        return False
+
+    for i in range(4):
+        p0 = polygon[i]
+        p1 = polygon[(i + 1) % 4]
+        p2 = polygon[(i + 2) % 4]
+        cross = float(np.cross(p1 - p0, p2 - p1))
+        if cross <= 0:
+            return False
+
+    return True
+
+
+def _quadrilateral_shape_penalty(points: List[np.ndarray], geom: PageGeometry) -> float:
+    top_width = np.linalg.norm(points[1] - points[0])
+    bottom_width = np.linalg.norm(points[3] - points[2])
+    left_height = np.linalg.norm(points[2] - points[0])
+    right_height = np.linalg.norm(points[3] - points[1])
+
+    avg_width = (top_width + bottom_width) / 2.0
+    avg_height = (left_height + right_height) / 2.0
+
+    if avg_width <= 0 or avg_height <= 0:
+        return float("inf")
+
+    expected_ratio = geom.width / geom.height if geom.height else avg_width / avg_height
+    ratio = avg_width / avg_height
+    ratio_penalty = abs(math.log(max(ratio / expected_ratio, 1e-6)))
+
+    width_delta = abs(top_width - bottom_width) / max(avg_width, 1e-6)
+    height_delta = abs(left_height - right_height) / max(avg_height, 1e-6)
+    skew_penalty = (width_delta + height_delta) * 0.4
+
+    return ratio_penalty + skew_penalty
+
+
+def _grid_alignment_penalty(
+    assignment: Dict[str, _AnchorCandidate],
+    grid_candidates: Dict[str, List[Tuple[float, float]]],
+    diag: float,
+) -> float:
+    penalty = 0.0
+    for side, corners in ("left", ("top_left", "bottom_left")), ("right", ("top_right", "bottom_right")):
+        samples = grid_candidates.get(side, [])
+        if not samples:
+            penalty += 0.4
+            continue
+
+        p1 = np.array(assignment[corners[0]].center)
+        p2 = np.array(assignment[corners[1]].center)
+        line_penalty = _average_distance_to_line(samples, p1, p2)
+        penalty += (line_penalty / max(diag, 1e-6)) * 2.5
+
+    return penalty
+
+
+def _average_distance_to_line(
+    samples: List[Tuple[float, float]], p1: np.ndarray, p2: np.ndarray
+) -> float:
+    line_vec = p2 - p1
+    norm = math.hypot(line_vec[0], line_vec[1])
+    if norm < 1e-6:
+        return float("inf")
+
+    total = 0.0
+    for sx, sy in samples:
+        diff_x = sx - p1[0]
+        diff_y = sy - p1[1]
+        distance = abs(line_vec[0] * diff_y - line_vec[1] * diff_x) / norm
+        total += distance
+
+    return total / max(len(samples), 1)
+
+
+def _validate_with_grid(
+    gray: np.ndarray,
+    points: List[Tuple[float, float]],
+    geom: PageGeometry,
+    markers: MarkerConfig,
+) -> bool:
+    output_width, output_height = _compute_output_dimensions(geom)
+    src = np.float32(points)
+    dst = np.float32(
+        [
+            [0, 0],
+            [output_width - 1, 0],
+            [0, output_height - 1],
+            [output_width - 1, output_height - 1],
+        ]
+    )
+
+    matrix = cv2.getPerspectiveTransform(src, dst)
+    warped = cv2.warpPerspective(gray, matrix, (output_width, output_height))
+
+    return _grid_columns_validate_rectified(warped, geom, markers)
+
+
+def _grid_columns_validate_rectified(
+    corrected_gray: np.ndarray, geom: PageGeometry, markers: MarkerConfig
+) -> bool:
+    if corrected_gray.ndim == 3:
+        corrected_gray = cv2.cvtColor(corrected_gray, cv2.COLOR_BGR2GRAY)
+
+    _, binary = cv2.threshold(
+        corrected_gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
+    )
+
+    height, width = binary.shape
+    expected_spacing = (markers.grid_spacing / geom.height) * height if geom.height else 0
+
+    expected_grid_area = (
+        (markers.grid_marker_size / geom.width) * width
+        * (markers.grid_marker_size / geom.height) * height
+        if geom.width and geom.height
+        else width * height * 0.00002
+    )
+
+    left_x = (geom.margin / 2 + markers.grid_marker_size / 2) / geom.width * width
+    right_x = (
+        geom.width - geom.margin / 2 - markers.grid_marker_size / 2
+    ) / geom.width * width
+    tolerance_x = max((markers.grid_marker_size / geom.width) * width * 1.5, 10)
+
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    left_points: List[Tuple[float, float]] = []
+    right_points: List[Tuple[float, float]] = []
+
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        if area <= 0:
+            continue
+        if area < expected_grid_area * 0.3 or area > expected_grid_area * 4.0:
+            continue
+        moments = cv2.moments(contour)
+        if moments["m00"] == 0:
+            continue
+        cx = moments["m10"] / moments["m00"]
+        cy = moments["m01"] / moments["m00"]
+
+        if abs(cx - left_x) <= tolerance_x:
+            left_points.append((cx, cy))
+        elif abs(cx - right_x) <= tolerance_x:
+            right_points.append((cx, cy))
+
+    return _grid_column_valid(left_points, expected_spacing, height) and _grid_column_valid(
+        right_points, expected_spacing, height
+    )
+
+
+def _grid_column_valid(
+    points: List[Tuple[float, float]], expected_spacing: float, image_height: int
+) -> bool:
+    if len(points) < 4 or expected_spacing <= 0:
+        return False
+
+    ordered = sorted(points, key=lambda p: p[1])
+    diffs = [ordered[i + 1][1] - ordered[i][1] for i in range(len(ordered) - 1)]
+    if not diffs:
+        return False
+
+    median_spacing = float(np.median(diffs))
+    if median_spacing <= 0:
+        return False
+
+    ratio = median_spacing / expected_spacing
+    if ratio < 0.65 or ratio > 1.35:
+        return False
+
+    coverage = ordered[-1][1] - ordered[0][1]
+    if coverage < image_height * 0.4:
+        return False
+
+    return True
 
 
 
@@ -423,7 +799,7 @@ def process_omr_sheet(
     print(f"Processing {input_path.name}...")
 
     # Detect anchor markers
-    anchor_points = detect_anchor_markers(image)
+    anchor_points = detect_anchor_markers(image, geom, markers_cfg)
     if anchor_points is None or len(anchor_points) != 4:
         print("Failed to detect anchor markers")
         return False

@@ -50,7 +50,7 @@ def profile_analyze_bubble_fill():
     sheet = SheetLayout()
 
     # Detect and correct
-    anchor_points = detect_anchor_markers(image)
+    anchor_points = detect_anchor_markers(image, geom, markers_cfg)
     if anchor_points is None:
         print("Error: Could not detect anchor markers")
         return
