@@ -157,32 +157,53 @@ def apply_perspective_distortion(
 
 def apply_contrast_variation(
     image: np.ndarray,
-    gamma: float = 1.0,
-    brightness: int = 0
+    black_point: int = 0,
+    white_point: int = 255,
+    output_black: int = 0,
+    output_white: int = 255
 ) -> np.ndarray:
-    """Apply contrast and brightness variations.
+    """Apply contrast and brightness variations by remapping histogram.
+
+    Simulates real-world lighting conditions by remapping the input range
+    [black_point, white_point] to output range [output_black, output_white].
 
     Args:
         image: Input image
-        gamma: Gamma correction (< 1.0 = darker, > 1.0 = lighter)
-        brightness: Brightness offset (-100 to 100)
+        black_point: Input value to treat as black (0-255)
+        white_point: Input value to treat as white (0-255)
+        output_black: Output value for blacks (0-255)
+        output_white: Output value for whites (0-255)
 
     Returns:
         Modified image
+
+    Examples:
+        Underexposed (dark): black_point=0, white_point=255, output_black=10, output_white=120
+            -> Markers go 0→10, background 255→120
+        Overexposed (washed): black_point=0, white_point=255, output_black=180, output_white=250
+            -> Markers go 0→180, background 255→250
+        Low contrast: black_point=0, white_point=255, output_black=80, output_white=180
+            -> Everything compressed to narrow range
     """
-    # Build gamma correction lookup table
-    inv_gamma = 1.0 / gamma
-    table = np.array([
-        ((i / 255.0) ** inv_gamma) * 255
-        for i in range(256)
-    ]).astype("uint8")
+    # Build lookup table for histogram remapping
+    table = np.zeros(256, dtype=np.uint8)
 
-    # Apply gamma correction
+    for i in range(256):
+        # Normalize input to [0, 1] range
+        if white_point > black_point:
+            normalized = (i - black_point) / (white_point - black_point)
+        else:
+            normalized = 0.0
+
+        # Clamp to [0, 1]
+        normalized = max(0.0, min(1.0, normalized))
+
+        # Map to output range
+        output_value = output_black + normalized * (output_white - output_black)
+        table[i] = np.clip(int(output_value), 0, 255)
+
+    # Apply lookup table
     result = cv2.LUT(image, table)
-
-    # Apply brightness
-    if brightness != 0:
-        result = cv2.convertScaleAbs(result, alpha=1.0, beta=brightness)
 
     return result
 
@@ -326,22 +347,36 @@ def generate_distortion_tests(
     ))
 
     # === Contrast Variations ===
+    # These simulate real-world lighting issues that challenge fixed thresholds
+
     tests.append((
-        "contrast_low_dark",
-        "Contrast: Low light (gamma 0.6)",
-        apply_contrast_variation(original, gamma=0.6)
+        "contrast_underexposed",
+        "Contrast: Underexposed/dark photo (markers ~30, background ~120)",
+        apply_contrast_variation(original, output_black=30, output_white=120)
     ))
 
     tests.append((
-        "contrast_low_washed",
-        "Contrast: Washed out (gamma 1.5, brightness +20)",
-        apply_contrast_variation(original, gamma=1.5, brightness=20)
+        "contrast_overexposed",
+        "Contrast: Overexposed/washed out (markers ~190, background ~245)",
+        apply_contrast_variation(original, output_black=190, output_white=245)
+    ))
+
+    tests.append((
+        "contrast_low_range",
+        "Contrast: Low contrast/compressed range (markers ~85, background ~165)",
+        apply_contrast_variation(original, output_black=85, output_white=165)
     ))
 
     tests.append((
         "contrast_very_dark",
-        "Contrast: Very dark (gamma 0.4, brightness -30)",
-        apply_contrast_variation(original, gamma=0.4, brightness=-30)
+        "Contrast: Very dark/severe underexposure (markers ~10, background ~80)",
+        apply_contrast_variation(original, output_black=10, output_white=80)
+    ))
+
+    tests.append((
+        "contrast_shifted",
+        "Contrast: Mid-gray shifted (markers ~100, background ~200)",
+        apply_contrast_variation(original, output_black=100, output_white=200)
     ))
 
     # === Aspect Distortions ===
@@ -366,23 +401,22 @@ def generate_distortion_tests(
     # === Combined Distortions (Realistic) ===
     tests.append((
         "combined_realistic_1",
-        "Combined: Slight rotation + low contrast",
+        "Combined: Slight rotation + underexposed",
         apply_contrast_variation(
             apply_perspective_distortion(original, rotation=7),
-            gamma=0.7
+            output_black=40, output_white=130
         )
     ))
 
     tests.append((
         "combined_realistic_2",
-        "Combined: Tilt + horizontal squash + dark",
+        "Combined: Tilt + horizontal squash + low contrast",
         apply_contrast_variation(
             apply_aspect_distortion(
                 apply_perspective_distortion(original, tilt_x=8, tilt_y=5),
                 horizontal_scale=0.9
             ),
-            gamma=0.6,
-            brightness=-15
+            output_black=90, output_white=170
         )
     ))
 
