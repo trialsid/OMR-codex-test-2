@@ -126,27 +126,44 @@ def apply_perspective_distortion(
     ])
 
     # Apply perspective tilt by modifying the trapezoid
-    # tilt_x: positive = viewing from right (left side appears farther/smaller)
-    # tilt_y: positive = viewing from bottom (top appears farther/smaller)
-
-    x_scale = tilt_x * 0.01  # Scale factor
-    y_scale = tilt_y * 0.01
+    # tilt_x: positive = viewing from right (left edge appears farther/compressed vertically)
+    # tilt_y: positive = viewing from bottom (top edge appears farther/compressed horizontally)
 
     if tilt_x != 0:
-        # Horizontal tilt: left edge appears smaller (farther away)
-        offset_x = int(w * x_scale)
-        dst_corners[0][0] += offset_x  # top-left: move right
-        dst_corners[2][0] += offset_x  # bottom-left: move right
-        dst_corners[1][0] -= offset_x * 0.3  # top-right: slight adjustment
-        dst_corners[3][0] -= offset_x * 0.3  # bottom-right: slight adjustment
+        # Horizontal tilt: left edge appears farther away
+        # Left edge gets compressed vertically (trapezoid effect)
+        # The two left corners move toward the vertical center
+        compression = tilt_x * 0.015  # Compression factor
+
+        # Calculate how much to move left edge corners toward center
+        left_compression = int(h * compression)
+
+        # Compress left edge vertically
+        dst_corners[0][1] += left_compression  # top-left: move down
+        dst_corners[2][1] -= left_compression  # bottom-left: move up
+
+        # Right edge expands slightly (closer to viewer)
+        right_expansion = int(left_compression * 0.3)
+        dst_corners[1][1] -= right_expansion  # top-right: move up slightly
+        dst_corners[3][1] += right_expansion  # bottom-right: move down slightly
 
     if tilt_y != 0:
-        # Vertical tilt: top edge appears smaller (farther away)
-        offset_y = int(h * y_scale)
-        dst_corners[0][1] += offset_y  # top-left: move down
-        dst_corners[1][1] += offset_y  # top-right: move down
-        dst_corners[2][1] -= offset_y * 0.3  # bottom-left: slight adjustment
-        dst_corners[3][1] -= offset_y * 0.3  # bottom-right: slight adjustment
+        # Vertical tilt: top edge appears farther away
+        # Top edge gets compressed horizontally (trapezoid effect)
+        # The two top corners move toward the horizontal center
+        compression = tilt_y * 0.015  # Compression factor
+
+        # Calculate how much to move top edge corners toward center
+        top_compression = int(w * compression)
+
+        # Compress top edge horizontally
+        dst_corners[0][0] += top_compression  # top-left: move right
+        dst_corners[1][0] -= top_compression  # top-right: move left
+
+        # Bottom edge expands slightly (closer to viewer)
+        bottom_expansion = int(top_compression * 0.3)
+        dst_corners[2][0] -= bottom_expansion  # bottom-left: move left slightly
+        dst_corners[3][0] += bottom_expansion  # bottom-right: move right slightly
 
     # Calculate and apply perspective transform
     matrix = cv2.getPerspectiveTransform(src_corners, dst_corners)
@@ -222,19 +239,37 @@ def apply_aspect_distortion(
         vertical_scale: Vertical scaling factor
 
     Returns:
-        Distorted image
+        Distorted image with white padding to maintain canvas size
     """
     h, w = image.shape[:2]
     new_w = int(w * horizontal_scale)
     new_h = int(h * vertical_scale)
 
-    # Resize with new aspect ratio
+    # Resize with new aspect ratio (actual distortion)
     distorted = cv2.resize(image, (new_w, new_h))
 
-    # Resize back to original dimensions to maintain size
-    result = cv2.resize(distorted, (w, h))
+    # Create canvas at original size with white background
+    canvas = np.full((h, w, 3) if len(image.shape) == 3 else (h, w), 255, dtype=np.uint8)
 
-    return result
+    # Center the distorted image on the canvas
+    offset_x = (w - new_w) // 2
+    offset_y = (h - new_h) // 2
+
+    # Handle case where distorted image is larger than original
+    if new_w > w or new_h > h:
+        # Crop the distorted image to fit
+        crop_x = max(0, (new_w - w) // 2)
+        crop_y = max(0, (new_h - h) // 2)
+        crop_w = min(new_w, w)
+        crop_h = min(new_h, h)
+
+        distorted_crop = distorted[crop_y:crop_y + crop_h, crop_x:crop_x + crop_w]
+        canvas[0:crop_h, 0:crop_w] = distorted_crop
+    else:
+        # Place distorted image centered on canvas
+        canvas[offset_y:offset_y + new_h, offset_x:offset_x + new_w] = distorted
+
+    return canvas
 
 
 def process_distorted_image(
