@@ -37,42 +37,173 @@ class Bubble:
         return self.x < other.x
 
 
-def detect_anchor_markers(image: np.ndarray) -> Optional[List[Tuple[int, int]]]:
-    """Detect the four corner anchor markers.
+def detect_anchor_markers(
+    image: np.ndarray,
+    geom: PageGeometry,
+    markers_cfg: MarkerConfig
+) -> Optional[List[Tuple[int, int]]]:
+    """Detect the four corner anchor markers with validation.
+
+    Args:
+        image: Input image
+        geom: Page geometry configuration
+        markers_cfg: Marker configuration with expected anchor size
 
     Returns:
         List of (x, y) coordinates for [top-left, top-right, bottom-left, bottom-right]
         or None if detection fails.
     """
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
-    _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY_INV)
+
+    # Use Otsu's automatic thresholding to handle varying lighting conditions
+    # This automatically finds the optimal threshold between dark markers and light background
+    # Works for underexposed, overexposed, and normal lighting scenarios
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+    img_height, img_width = gray.shape
+
+    # Calculate expected anchor size in pixels
+    # Assume image corresponds roughly to the page geometry
+    scale = img_width / geom.width
+    expected_anchor_size = markers_cfg.anchor_size * scale
+    expected_area = expected_anchor_size ** 2
+
+    # Allow 50% tolerance for size variation
+    min_area = expected_area * 0.5
+    max_area = expected_area * 2.0
+
+    # Define corner bands (anchors should be in outer 25% of image)
+    # Allows for realistic mobile captures with some margin around the sheet
+    corner_band_x = img_width * 0.25
+    corner_band_y = img_height * 0.25
 
     # Find contours
     contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    # Filter for square-like contours
-    markers = []
+    # Filter for square-like contours with expected size and corner positions
+    candidates = []
     for contour in contours:
         area = cv2.contourArea(contour)
-        if area < 100 or area > 5000:  # Filter by area
+
+        # Check area against expected anchor size
+        if area < min_area or area > max_area:
             continue
 
         # Check if it's square-like
         x, y, w, h = cv2.boundingRect(contour)
         aspect_ratio = float(w) / h if h > 0 else 0
-        if 0.7 < aspect_ratio < 1.3:  # Approximately square
-            # Use center of bounding box
-            markers.append((x + w // 2, y + h // 2))
+        if not (0.6 < aspect_ratio < 1.4):  # Approximately square
+            continue
 
-    if len(markers) < 4:
+        # Check if bounding box is in a corner region
+        center_x = x + w // 2
+        center_y = y + h // 2
+
+        in_left_band = center_x < corner_band_x
+        in_right_band = center_x > (img_width - corner_band_x)
+        in_top_band = center_y < corner_band_y
+        in_bottom_band = center_y > (img_height - corner_band_y)
+
+        # Must be in a corner (left/right AND top/bottom)
+        in_corner = (in_left_band or in_right_band) and (in_top_band or in_bottom_band)
+
+        if not in_corner:
+            continue
+
+        candidates.append((center_x, center_y))
+
+    if len(candidates) < 4:
+        print(f"Warning: Only found {len(candidates)} anchor candidates (expected 4)")
         return None
 
-    # Sort markers: top-left, top-right, bottom-left, bottom-right
-    markers = sorted(markers, key=lambda p: p[1])  # Sort by y
-    top_two = sorted(markers[:2], key=lambda p: p[0])  # Top row, sort by x
-    bottom_two = sorted(markers[-2:], key=lambda p: p[0])  # Bottom row, sort by x
+    # Sort candidates to find the four corners
+    candidates = sorted(candidates, key=lambda p: p[1])  # Sort by y
+    top_two = sorted(candidates[:2], key=lambda p: p[0])  # Top row, sort by x
+    bottom_two = sorted(candidates[-2:], key=lambda p: p[0])  # Bottom row, sort by x
 
-    return [top_two[0], top_two[1], bottom_two[0], bottom_two[1]]
+    markers = [top_two[0], top_two[1], bottom_two[0], bottom_two[1]]
+
+    # Validate geometric layout: check if markers form a reasonable rectangle
+    if not _validate_rectangle_geometry(markers, img_width, img_height):
+        print("Warning: Anchor markers do not form a valid rectangular layout")
+        return None
+
+    return markers
+
+
+def _validate_rectangle_geometry(
+    markers: List[Tuple[int, int]],
+    img_width: int,
+    img_height: int
+) -> bool:
+    """Validate that four markers form a reasonable rectangle.
+
+    Args:
+        markers: [top-left, top-right, bottom-left, bottom-right] coordinates
+        img_width: Image width in pixels
+        img_height: Image height in pixels
+
+    Returns:
+        True if geometry is valid, False otherwise
+    """
+    if len(markers) != 4:
+        return False
+
+    tl, tr, bl, br = markers
+
+    # Check horizontal alignment: top two should have similar y, bottom two similar y
+    # Allow 12% tolerance for realistic perspective distortion from mobile captures
+    top_y_diff = abs(tl[1] - tr[1])
+    bottom_y_diff = abs(bl[1] - br[1])
+    max_y_tolerance = img_height * 0.12  # 12% tolerance for perspective
+
+    if top_y_diff > max_y_tolerance or bottom_y_diff > max_y_tolerance:
+        print(f"Warning: Horizontal alignment check failed (top_diff={top_y_diff}, bottom_diff={bottom_y_diff})")
+        return False
+
+    # Check vertical alignment: left two should have similar x, right two similar x
+    # Allow 12% tolerance for realistic perspective distortion from mobile captures
+    left_x_diff = abs(tl[0] - bl[0])
+    right_x_diff = abs(tr[0] - br[0])
+    max_x_tolerance = img_width * 0.12  # 12% tolerance for perspective
+
+    if left_x_diff > max_x_tolerance or right_x_diff > max_x_tolerance:
+        print(f"Warning: Vertical alignment check failed (left_diff={left_x_diff}, right_diff={right_x_diff})")
+        return False
+
+    # Check that widths are consistent (top and bottom should be similar)
+    # Trapezoid shape from perspective can make widths differ by ~20%
+    top_width = tr[0] - tl[0]
+    bottom_width = br[0] - bl[0]
+    width_ratio = min(top_width, bottom_width) / max(top_width, bottom_width) if max(top_width, bottom_width) > 0 else 0
+
+    if width_ratio < 0.75:  # Widths should be within 25% of each other
+        print(f"Warning: Width consistency check failed (ratio={width_ratio:.2f})")
+        return False
+
+    # Check that heights are consistent (left and right should be similar)
+    # Trapezoid shape from perspective can make heights differ by ~20%
+    left_height = bl[1] - tl[1]
+    right_height = br[1] - tr[1]
+    height_ratio = min(left_height, right_height) / max(left_height, right_height) if max(left_height, right_height) > 0 else 0
+
+    if height_ratio < 0.75:  # Heights should be within 25% of each other
+        print(f"Warning: Height consistency check failed (ratio={height_ratio:.2f})")
+        return False
+
+    # Check aspect ratio is reasonable (should be close to expected image aspect)
+    # Allow 30% deviation for perspective distortion
+    avg_width = (top_width + bottom_width) / 2
+    avg_height = (left_height + right_height) / 2
+    aspect_ratio = avg_width / avg_height if avg_height > 0 else 0
+    expected_aspect = img_width / img_height
+
+    # Allow 30% deviation from expected aspect ratio for realistic captures
+    if abs(aspect_ratio - expected_aspect) > expected_aspect * 0.3:
+        print(f"Warning: Aspect ratio check failed (found={aspect_ratio:.2f}, expected={expected_aspect:.2f})")
+        return False
+
+    return True
 
 
 def correct_skew(image: np.ndarray, markers: List[Tuple[int, int]], geom: PageGeometry) -> np.ndarray:
@@ -112,6 +243,43 @@ def correct_skew(image: np.ndarray, markers: List[Tuple[int, int]], geom: PageGe
 
 
 
+def calculate_adaptive_fill_threshold(gray: np.ndarray, base_threshold: float = 0.4) -> float:
+    """Calculate adaptive fill threshold based on image contrast profile.
+
+    Args:
+        gray: Grayscale image of the corrected sheet
+        base_threshold: Base threshold for normal contrast conditions
+
+    Returns:
+        Adjusted threshold that accounts for compressed contrast ranges
+    """
+    # Analyze the image's intensity distribution
+    # Use percentiles to ignore outliers (very dark/bright pixels)
+    percentile_low = np.percentile(gray, 5)   # Darkest 5% (likely filled bubbles/markers)
+    percentile_high = np.percentile(gray, 95)  # Lightest 95% (background/unfilled)
+
+    # Calculate available contrast range
+    available_range = percentile_high - percentile_low
+    max_range = 255.0  # Maximum possible range
+
+    # Contrast factor: how much contrast is available (0.0 to 1.0)
+    contrast_factor = available_range / max_range if max_range > 0 else 1.0
+
+    # Adjust threshold based on available contrast
+    # Less contrast = lower threshold needed to detect filled bubbles
+    # More contrast = can use higher threshold for better discrimination
+    if contrast_factor < 0.3:  # Very low contrast (e.g., overexposed)
+        adjusted_threshold = base_threshold * 0.5  # Lower threshold significantly
+    elif contrast_factor < 0.5:  # Moderate low contrast
+        adjusted_threshold = base_threshold * 0.7
+    elif contrast_factor < 0.7:  # Slightly reduced contrast
+        adjusted_threshold = base_threshold * 0.85
+    else:  # Normal or high contrast
+        adjusted_threshold = base_threshold
+
+    return adjusted_threshold
+
+
 def _coordinate_to_bubble(
     coord: BubbleCoordinate,
     geom: PageGeometry,
@@ -122,6 +290,7 @@ def _coordinate_to_bubble(
     margin_y: int,
     inner_gray: np.ndarray,
     layout: BubbleLayout,
+    adaptive_threshold: float,
 ) -> Optional[Bubble]:
     """Convert a PDF coordinate to pixel coordinates and sample fill state."""
     # Calculate transformation from PDF to pixel space
@@ -165,13 +334,13 @@ def _coordinate_to_bubble(
     ):
         return None
 
-    # Analyze fill state
+    # Analyze fill state using adaptive threshold
     is_filled, intensity = analyze_bubble_fill(
         inner_gray,
         inner_x,
         inner_y,
         radius,
-        layout.fill_threshold,
+        adaptive_threshold,
     )
 
     return Bubble(
@@ -222,11 +391,14 @@ def sample_bubbles_from_coordinates(
     if inner_gray.size == 0:
         return [[] for _ in range(sheet.roll_rows)], []
 
+    # Calculate adaptive fill threshold based on sheet's contrast profile
+    adaptive_threshold = calculate_adaptive_fill_threshold(gray, layout.fill_threshold)
+
     # Process roll bubbles
     roll_groups: List[List[Bubble]] = [[] for _ in range(sheet.roll_rows)]
     for coord in roll_coords:
         bubble = _coordinate_to_bubble(
-            coord, geom, markers, width, height, margin_x, margin_y, inner_gray, layout
+            coord, geom, markers, width, height, margin_x, margin_y, inner_gray, layout, adaptive_threshold
         )
         if bubble is not None and coord.row is not None:
             roll_groups[coord.row].append(bubble)
@@ -240,7 +412,7 @@ def sample_bubbles_from_coordinates(
 
     for coord in question_coords:
         bubble = _coordinate_to_bubble(
-            coord, geom, markers, width, height, margin_x, margin_y, inner_gray, layout
+            coord, geom, markers, width, height, margin_x, margin_y, inner_gray, layout, adaptive_threshold
         )
         if bubble is not None and coord.question is not None and coord.option_index is not None:
             question_map.setdefault(coord.question, []).append((coord.option_index, bubble))
@@ -422,13 +594,19 @@ def process_omr_sheet(
 
     print(f"Processing {input_path.name}...")
 
-    # Detect anchor markers
-    anchor_points = detect_anchor_markers(image)
+    # Detect anchor markers with validation
+    anchor_points = detect_anchor_markers(image, geom, markers_cfg)
     if anchor_points is None or len(anchor_points) != 4:
-        print("Failed to detect anchor markers")
+        print(f"ERROR: Failed to detect valid anchor markers for {input_path.name}")
+        print("Possible causes:")
+        print("  - Anchors are outside expected corner regions")
+        print("  - Anchor size doesn't match configuration")
+        print("  - Detected anchors don't form a proper rectangle")
+        print("  - Strong perspective distortion or misaligned scan")
+        print("Skipping this sheet.")
         return False
 
-    print(f"Detected {len(anchor_points)} anchor markers")
+    print(f"Detected and validated {len(anchor_points)} anchor markers")
 
     # Correct skew
     corrected = correct_skew(image, anchor_points, geom)

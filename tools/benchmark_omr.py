@@ -95,7 +95,7 @@ def process_with_timing(
 
     # Detect anchors
     t0 = time.perf_counter()
-    anchor_points = detect_anchor_markers(image)
+    anchor_points = detect_anchor_markers(image, geom, markers_cfg)
     if anchor_points is None or len(anchor_points) != 4:
         raise ValueError("Failed to detect anchor markers")
     timing.detect_anchors = time.perf_counter() - t0

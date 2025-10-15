@@ -31,6 +31,70 @@ from omr_processor import (
 )
 
 
+def crop_to_content_and_resize(image: np.ndarray, target_shape: Tuple[int, int]) -> np.ndarray:
+    """Crop image to non-white content and resize to target dimensions.
+
+    Args:
+        image: Input image with potential white borders
+        target_shape: (height, width) to resize to
+
+    Returns:
+        Cropped and resized image filling target dimensions
+    """
+    # Convert to grayscale for thresholding
+    if len(image.shape) == 3:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = image
+
+    # Threshold to find non-white content (anything darker than 250)
+    _, binary = cv2.threshold(gray, 250, 255, cv2.THRESH_BINARY_INV)
+
+    # Find contours of non-white regions
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    if not contours:
+        # No content found, return original resized
+        return cv2.resize(image, (target_shape[1], target_shape[0]))
+
+    # Get bounding box of all content
+    x_min, y_min = float('inf'), float('inf')
+    x_max, y_max = 0, 0
+
+    for contour in contours:
+        x, y, w, h = cv2.boundingRect(contour)
+        x_min = min(x_min, x)
+        y_min = min(y_min, y)
+        x_max = max(x_max, x + w)
+        y_max = max(y_max, y + h)
+
+    x_min, y_min = int(x_min), int(y_min)
+    x_max, y_max = int(x_max), int(y_max)
+
+    # Add bleed/margin around content (8% of content dimensions)
+    # This leaves realistic white space like a mobile camera capture
+    content_width = x_max - x_min
+    content_height = y_max - y_min
+    bleed_x = int(content_width * 0.08)
+    bleed_y = int(content_height * 0.08)
+
+    # Expand bounding box with bleed, staying within image bounds
+    img_h, img_w = image.shape[:2]
+    x_min = max(0, x_min - bleed_x)
+    y_min = max(0, y_min - bleed_y)
+    x_max = min(img_w, x_max + bleed_x)
+    y_max = min(img_h, y_max + bleed_y)
+
+    # Crop to content with bleed
+    cropped = image[y_min:y_max, x_min:x_max]
+
+    # Resize to target dimensions
+    target_h, target_w = target_shape
+    resized = cv2.resize(cropped, (target_w, target_h))
+
+    return resized
+
+
 @dataclass
 class DistortionResult:
     """Result of processing a distorted image."""
@@ -68,6 +132,8 @@ def apply_perspective_distortion(
         Distorted image with all corners visible
     """
     h, w = image.shape[:2]
+    # Save original dimensions to resize back to at the end
+    original_h, original_w = h, w
 
     # For rotation, we need a larger canvas to avoid cutting off corners
     if rotation != 0:
@@ -170,7 +236,9 @@ def apply_perspective_distortion(
     distorted = cv2.warpPerspective(image, matrix, (w, h),
                                     borderValue=(255, 255, 255))
 
-    return distorted
+    # Crop whitespace and resize to original dimensions to fill the frame
+    result = crop_to_content_and_resize(distorted, (original_h, original_w))
+    return result
 
 
 def apply_contrast_variation(
@@ -239,7 +307,7 @@ def apply_aspect_distortion(
         vertical_scale: Vertical scaling factor
 
     Returns:
-        Distorted image on expanded canvas with white padding to ensure all anchors visible
+        Distorted image resized back to original canvas dimensions
     """
     h, w = image.shape[:2]
     new_w = int(w * horizontal_scale)
@@ -248,21 +316,23 @@ def apply_aspect_distortion(
     # Resize with new aspect ratio (actual distortion)
     distorted = cv2.resize(image, (new_w, new_h))
 
-    # Add margin padding (10% of larger dimension) to ensure anchors don't touch edges
-    margin = int(max(new_w, new_h) * 0.1)
+    # Add small margin padding to avoid edge artifacts during final resize
+    margin = int(max(new_w, new_h) * 0.05)
 
-    # Create canvas large enough to fit distorted image + margin
+    # Create canvas with padding
     canvas_w = new_w + 2 * margin
     canvas_h = new_h + 2 * margin
     canvas = np.full((canvas_h, canvas_w, 3) if len(image.shape) == 3 else (canvas_h, canvas_w),
                      255, dtype=np.uint8)
 
-    # Center the distorted image on the expanded canvas
+    # Center the distorted image on canvas
     offset_x = margin
     offset_y = margin
     canvas[offset_y:offset_y + new_h, offset_x:offset_x + new_w] = distorted
 
-    return canvas
+    # Crop whitespace and resize to original dimensions to fill the frame
+    result = crop_to_content_and_resize(canvas, (h, w))
+    return result
 
 
 def process_distorted_image(
@@ -279,7 +349,7 @@ def process_distorted_image(
     """
     try:
         # Detect anchor markers
-        anchor_points = detect_anchor_markers(image)
+        anchor_points = detect_anchor_markers(image, geom, markers_cfg)
 
         # Create anchor visualization
         anchor_viz = image.copy()
