@@ -46,7 +46,7 @@ class BubbleLayout:
 @dataclass(frozen=True)
 class MarkerConfig:
     """Configuration for anchor and grid markers."""
-    anchor_size: float = 18
+    anchor_size: float = 20
     grid_marker_size: float = 6
     grid_spacing: float = 42
 

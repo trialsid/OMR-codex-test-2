@@ -351,10 +351,38 @@ def process_distorted_image(
         # Detect anchor markers
         anchor_points = detect_anchor_markers(image, geom, markers_cfg)
 
-        # Create anchor visualization
+        # Create anchor visualization with corner zones overlay
         anchor_viz = image.copy()
+        img_height, img_width = image.shape[:2]
+
+        # Draw corner zone bands (where anchors are expected)
+        corner_band_x = int(img_width * 0.25)
+        corner_band_y = int(img_height * 0.25)
+
+        # Create overlay for semi-transparent corner zones
+        overlay = anchor_viz.copy()
+        zone_color = (0, 165, 255)  # Orange in BGR
+
+        # Top-left corner zone
+        cv2.rectangle(overlay, (0, 0), (corner_band_x, corner_band_y), zone_color, -1)
+
+        # Top-right corner zone
+        cv2.rectangle(overlay, (img_width - corner_band_x, 0),
+                     (img_width, corner_band_y), zone_color, -1)
+
+        # Bottom-left corner zone
+        cv2.rectangle(overlay, (0, img_height - corner_band_y),
+                     (corner_band_x, img_height), zone_color, -1)
+
+        # Bottom-right corner zone
+        cv2.rectangle(overlay, (img_width - corner_band_x, img_height - corner_band_y),
+                     (img_width, img_height), zone_color, -1)
+
+        # Blend overlay with original (25% opacity)
+        anchor_viz = cv2.addWeighted(overlay, 0.25, anchor_viz, 0.75, 0)
+
+        # Draw detected anchors on top of zones
         if anchor_points is not None and len(anchor_points) > 0:
-            # Draw detected anchors
             for idx, (x, y) in enumerate(anchor_points):
                 cv2.circle(anchor_viz, (x, y), 20, (0, 255, 0), 3)
                 cv2.circle(anchor_viz, (x, y), 5, (0, 255, 0), -1)

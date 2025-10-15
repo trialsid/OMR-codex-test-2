@@ -152,42 +152,42 @@ def _validate_rectangle_geometry(
     tl, tr, bl, br = markers
 
     # Check horizontal alignment: top two should have similar y, bottom two similar y
-    # Allow 12% tolerance for realistic perspective distortion from mobile captures
+    # Allow 15% tolerance for realistic perspective distortion from mobile captures
     top_y_diff = abs(tl[1] - tr[1])
     bottom_y_diff = abs(bl[1] - br[1])
-    max_y_tolerance = img_height * 0.12  # 12% tolerance for perspective
+    max_y_tolerance = img_height * 0.15  # 15% tolerance for perspective (was 0.12)
 
     if top_y_diff > max_y_tolerance or bottom_y_diff > max_y_tolerance:
         print(f"Warning: Horizontal alignment check failed (top_diff={top_y_diff}, bottom_diff={bottom_y_diff})")
         return False
 
     # Check vertical alignment: left two should have similar x, right two similar x
-    # Allow 12% tolerance for realistic perspective distortion from mobile captures
+    # Allow 15% tolerance for realistic perspective distortion from mobile captures
     left_x_diff = abs(tl[0] - bl[0])
     right_x_diff = abs(tr[0] - br[0])
-    max_x_tolerance = img_width * 0.12  # 12% tolerance for perspective
+    max_x_tolerance = img_width * 0.15  # 15% tolerance for perspective (was 0.12)
 
     if left_x_diff > max_x_tolerance or right_x_diff > max_x_tolerance:
         print(f"Warning: Vertical alignment check failed (left_diff={left_x_diff}, right_diff={right_x_diff})")
         return False
 
     # Check that widths are consistent (top and bottom should be similar)
-    # Trapezoid shape from perspective can make widths differ by ~20%
+    # Trapezoid shape from perspective can make widths differ by ~30%
     top_width = tr[0] - tl[0]
     bottom_width = br[0] - bl[0]
     width_ratio = min(top_width, bottom_width) / max(top_width, bottom_width) if max(top_width, bottom_width) > 0 else 0
 
-    if width_ratio < 0.75:  # Widths should be within 25% of each other
+    if width_ratio < 0.70:  # Widths should be within 30% of each other (was 0.75)
         print(f"Warning: Width consistency check failed (ratio={width_ratio:.2f})")
         return False
 
     # Check that heights are consistent (left and right should be similar)
-    # Trapezoid shape from perspective can make heights differ by ~20%
+    # Trapezoid shape from perspective can make heights differ by ~30%
     left_height = bl[1] - tl[1]
     right_height = br[1] - tr[1]
     height_ratio = min(left_height, right_height) / max(left_height, right_height) if max(left_height, right_height) > 0 else 0
 
-    if height_ratio < 0.75:  # Heights should be within 25% of each other
+    if height_ratio < 0.70:  # Heights should be within 30% of each other (was 0.75)
         print(f"Warning: Height consistency check failed (ratio={height_ratio:.2f})")
         return False
 
