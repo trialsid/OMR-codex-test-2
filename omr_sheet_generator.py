@@ -130,11 +130,11 @@ def draw_roll_number_section(
     # Draw write-in boxes for manual roll number entry
     # Boxes occupy row 2 (between label at row 1 and first bubbles at row 3)
     box_width = layout.diameter * 1.3
-    box_height = layout.diameter * 1.4
+    box_height = layout.diameter * 1.2  # Reduced height for better spacing
     box_y_center = top_y - layout.vertical_gap * 2
 
-    content.set_line_width(1.5)
-    content.set_stroke_color(0, 0, 0)
+    content.set_line_width(0.8)  # Thinner lines for subtlety
+    content.set_stroke_color(0.5, 0.5, 0.5)  # Grey color
 
     for col in range(sheet.roll_columns):
         # Calculate x to match bubble column centers
