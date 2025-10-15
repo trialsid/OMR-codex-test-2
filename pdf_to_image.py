@@ -32,10 +32,19 @@ def pdf_to_image(pdf_path: Path, output_path: Path, dpi: int = 200):
 
 
 if __name__ == "__main__":
-    pdf_path = Path("sheets/omr_sheet.pdf")
-    output_path = Path("sheets/omr_sheet.png")
+    sheets_dir = Path("sheets")
 
-    if not pdf_path.exists():
-        print(f"PDF not found: {pdf_path}")
+    if not sheets_dir.exists():
+        print(f"Directory not found: {sheets_dir}")
     else:
-        pdf_to_image(pdf_path, output_path)
+        # Find all PDF files in the sheets directory
+        pdf_files = list(sheets_dir.glob("*.pdf"))
+
+        if not pdf_files:
+            print(f"No PDF files found in {sheets_dir}")
+        else:
+            print(f"Found {len(pdf_files)} PDF file(s) to convert")
+            for pdf_path in pdf_files:
+                # Create output path with same name but .png extension
+                output_path = pdf_path.with_suffix(".png")
+                pdf_to_image(pdf_path, output_path)
