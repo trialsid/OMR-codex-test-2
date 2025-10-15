@@ -158,12 +158,12 @@ def calculate_questions_label_position(
     layout: BubbleLayout,
     sheet: SheetLayout,
 ) -> tuple[float, float]:
-    """Calculate the position for 'Questions' label.
+    """Calculate the position for 'Questions' label above option headers.
 
     Returns:
         (x, y) coordinates for the label, or (0, 0) if no valid position
     """
-    # Recalculate the geometry to find the label row
+    # Recalculate the geometry to find the first question bubble
     top_y = geom.height - geom.margin - layout.diameter
     # Account for the extra row used by the Roll Number label
     roll_bottom = top_y - (sheet.roll_rows + 1) * layout.vertical_gap - layout.radius
@@ -184,13 +184,17 @@ def calculate_questions_label_position(
         len(row_centers),
     )
 
-    # Label goes at the row after first_column_start
-    label_row_index = first_column_start + 1
-    if label_row_index >= len(row_centers):
+    # First question bubble in column 0 starts at first_column_start + 2
+    first_question_row = first_column_start + 2
+    if first_question_row >= len(row_centers):
         return 0, 0  # No valid position
 
+    # Position label well above the option headers for clear separation
+    # Headers are at topmost_y + 0.7 * vertical_gap
+    # Label should be significantly higher to avoid overlap
+    topmost_bubble_y = row_centers[first_question_row]
     label_x = geom.margin + layout.label_column_width + layout.column_padding / 2
-    label_y = row_centers[label_row_index]
+    label_y = topmost_bubble_y + layout.vertical_gap * 1.6
 
     return label_x, label_y
 

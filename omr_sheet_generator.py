@@ -10,6 +10,7 @@ The resulting PDF is saved inside the ``sheets/`` directory.
 """
 from __future__ import annotations
 
+import string
 from io import BytesIO
 from pathlib import Path
 from typing import Iterable, List
@@ -161,6 +162,31 @@ def draw_question_columns(
 
     content.set_line_width(1)
     content.set_stroke_color(0, 0, 0)
+
+    # Find topmost bubble per question_column for header placement
+    topmost_per_column = {}
+    for bubble in bubbles:
+        if bubble.question_column is not None:
+            col = bubble.question_column
+            if col not in topmost_per_column or bubble.y > topmost_per_column[col]:
+                topmost_per_column[col] = bubble.y
+
+    # Draw option headers (A, B, C, D) above each column
+    for col, top_y in topmost_per_column.items():
+        column_origin = geom.margin + col * layout.group_width(sheet.question_options)
+        x_base = column_origin + layout.label_column_width + layout.column_padding / 2
+
+        # Position headers above topmost bubble with comfortable spacing
+        header_y = top_y + layout.vertical_gap * 0.7
+
+        for opt in range(sheet.question_options):
+            # Calculate x exactly as bubbles do (matching omr_layout.py logic)
+            x = x_base + layout.radius + opt * (layout.diameter + layout.option_gap)
+            letter = string.ascii_uppercase[opt]
+
+            # Center text horizontally on bubble (adjust x by ~half char width)
+            text_offset = 3.25  # Approximate half-width of a letter at size 10
+            content.draw_text(x - text_offset, header_y, letter, size=10)
 
     # First pass: find max question number per column
     max_question_per_column = {}
