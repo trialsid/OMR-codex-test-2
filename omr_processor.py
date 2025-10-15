@@ -217,10 +217,35 @@ def correct_skew(image: np.ndarray, markers: List[Tuple[int, int]], geom: PageGe
     Returns:
         Corrected image
     """
-    # Calculate output dimensions based on A4 aspect ratio
-    aspect_ratio = geom.width / geom.height
-    output_height = 1400  # Target height in pixels
-    output_width = int(output_height * aspect_ratio)
+    # Calculate adaptive output dimensions based on detected marker distances
+    # This preserves original resolution quality instead of forcing 1400px
+    tl, tr, bl, br = markers
+
+    # Measure actual pixel distances between markers
+    top_edge = np.linalg.norm(np.array(tr) - np.array(tl))
+    bottom_edge = np.linalg.norm(np.array(br) - np.array(bl))
+    left_edge = np.linalg.norm(np.array(bl) - np.array(tl))
+    right_edge = np.linalg.norm(np.array(br) - np.array(tr))
+
+    # Average the opposing edges to get robust scale estimate
+    avg_width_pixels = (top_edge + bottom_edge) / 2.0
+    avg_height_pixels = (left_edge + right_edge) / 2.0
+
+    # Calculate scale factors from physical dimensions
+    scale_x = avg_width_pixels / geom.width
+    scale_y = avg_height_pixels / geom.height
+
+    # Use average scale to maintain aspect ratio
+    scale = (scale_x + scale_y) / 2.0
+
+    # Compute output dimensions preserving the detected resolution
+    output_width = int(round(geom.width * scale))
+    output_height = int(round(geom.height * scale))
+
+    # Clamp to reasonable bounds (min: avoid tiny images, max: don't exceed source)
+    img_height, img_width = image.shape[:2]
+    output_width = max(800, min(output_width, img_width))
+    output_height = max(1000, min(output_height, img_height))
 
     # Source points (detected markers)
     src_points = np.float32(markers)
@@ -238,6 +263,8 @@ def correct_skew(image: np.ndarray, markers: List[Tuple[int, int]], geom: PageGe
 
     # Apply transformation
     corrected = cv2.warpPerspective(image, matrix, (output_width, output_height))
+
+    print(f"Applied perspective correction: {img_width}x{img_height} → {output_width}x{output_height} (scale: {scale:.2f}x)")
 
     return corrected
 
@@ -610,7 +637,6 @@ def process_omr_sheet(
 
     # Correct skew
     corrected = correct_skew(image, anchor_points, geom)
-    print("Applied perspective correction")
 
     # Sample bubbles at procedurally generated coordinates
     roll_groups, question_groups = sample_bubbles_from_coordinates(
