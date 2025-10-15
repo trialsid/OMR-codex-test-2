@@ -410,7 +410,7 @@ def sample_bubbles_from_coordinates(
         return [], []
 
     # Generate bubble coordinates using shared logic
-    roll_coords, question_coords = generate_all_bubble_coordinates(geom, layout, sheet)
+    roll_coords, question_coords, _ = generate_all_bubble_coordinates(geom, layout, sheet)
 
     height, width = corrected.shape[:2]
     gray = cv2.cvtColor(corrected, cv2.COLOR_BGR2GRAY) if corrected.ndim == 3 else corrected

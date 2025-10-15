@@ -48,8 +48,8 @@ def generate_roll_bubble_coordinates(
 
     bubbles = []
     for row in range(sheet.roll_rows):
-        # Shift bubbles down by one row to make space for label in row 0
-        y = top_y - (row + 2) * layout.vertical_gap
+        # Shift bubbles down by two rows to make space for label and write-in boxes
+        y = top_y - (row + 3) * layout.vertical_gap
         for col in range(sheet.roll_columns):
             x = x_start + col * (layout.diameter + layout.option_gap)
             bubbles.append(BubbleCoordinate(
@@ -61,8 +61,8 @@ def generate_roll_bubble_coordinates(
                 digit=row % 10,
             ))
 
-    # Adjust bottom_y to account for the extra row used by the label
-    bottom_y = top_y - (sheet.roll_rows + 1) * layout.vertical_gap - layout.radius
+    # Adjust bottom_y to account for the extra rows used by label and write-in boxes
+    bottom_y = top_y - (sheet.roll_rows + 2) * layout.vertical_gap - layout.radius
     return bubbles, top_y, area_width, bottom_y
 
 
@@ -157,16 +157,18 @@ def calculate_questions_label_position(
     geom: PageGeometry,
     layout: BubbleLayout,
     sheet: SheetLayout,
+    roll_bottom: float,
 ) -> tuple[float, float]:
     """Calculate the position for 'Questions' label above option headers.
+
+    Args:
+        roll_bottom: Bottom edge of roll number section (passed from generate_roll_bubble_coordinates)
 
     Returns:
         (x, y) coordinates for the label, or (0, 0) if no valid position
     """
-    # Recalculate the geometry to find the first question bubble
+    # Use geometry to find the first question bubble
     top_y = geom.height - geom.margin - layout.diameter
-    # Account for the extra row used by the Roll Number label
-    roll_bottom = top_y - (sheet.roll_rows + 1) * layout.vertical_gap - layout.radius
 
     # Generate row centers for questions
     row_centers: List[float] = []
@@ -203,11 +205,11 @@ def generate_all_bubble_coordinates(
     geom: PageGeometry,
     layout: BubbleLayout,
     sheet: SheetLayout,
-) -> tuple[List[BubbleCoordinate], List[BubbleCoordinate]]:
+) -> tuple[List[BubbleCoordinate], List[BubbleCoordinate], float]:
     """Generate all bubble coordinates for an OMR sheet.
 
     Returns:
-        (roll_bubbles, question_bubbles)
+        (roll_bubbles, question_bubbles, roll_bottom)
     """
     roll_bubbles, roll_top, _, roll_bottom = generate_roll_bubble_coordinates(
         geom, layout, sheet
@@ -218,4 +220,4 @@ def generate_all_bubble_coordinates(
         geom, layout, sheet, roll_top, question_x_start, roll_bottom
     )
 
-    return roll_bubbles, question_bubbles
+    return roll_bubbles, question_bubbles, roll_bottom

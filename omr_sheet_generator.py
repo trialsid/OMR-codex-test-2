@@ -111,15 +111,38 @@ def draw_roll_number_section(
     content: PDFContent,
     geom: PageGeometry,
     layout: BubbleLayout,
+    sheet: SheetLayout,
     bubbles: List[BubbleCoordinate],
 ) -> None:
-    """Draw roll number bubbles and labels at specified coordinates."""
+    """Draw roll number bubbles, labels, and write-in boxes at specified coordinates."""
     if not bubbles:
         return
 
     # Calculate label position using layout geometry
     label_x, label_y = calculate_roll_label_position(geom, layout)
     content.draw_text(label_x, label_y, "Roll Number")
+
+    # Calculate geometry for write-in boxes (matching bubble positions)
+    top_y = geom.height - geom.margin - layout.diameter
+    left_padding = layout.column_padding / 2
+    x_start = geom.margin + layout.label_column_width + left_padding + layout.radius
+
+    # Draw write-in boxes for manual roll number entry
+    # Boxes occupy row 2 (between label at row 1 and first bubbles at row 3)
+    box_width = layout.diameter * 1.3
+    box_height = layout.diameter * 1.4
+    box_y_center = top_y - layout.vertical_gap * 2
+
+    content.set_line_width(1.5)
+    content.set_stroke_color(0, 0, 0)
+
+    for col in range(sheet.roll_columns):
+        # Calculate x to match bubble column centers
+        box_x_center = x_start + col * (layout.diameter + layout.option_gap)
+        # Convert center to bottom-left corner for PDF rectangle
+        box_x = box_x_center - box_width / 2
+        box_y = box_y_center - box_height / 2
+        content.stroke_rect(box_x, box_y, box_width, box_height)
 
     content.set_line_width(1)
     content.set_stroke_color(0, 0, 0)
@@ -150,13 +173,14 @@ def draw_question_columns(
     layout: BubbleLayout,
     sheet: SheetLayout,
     bubbles: List[BubbleCoordinate],
+    roll_bottom: float,
 ) -> None:
     """Draw question bubbles and labels at specified coordinates."""
     if not bubbles:
         return
 
-    # Calculate "Questions" label position using layout geometry
-    label_x, label_y = calculate_questions_label_position(geom, layout, sheet)
+    # Calculate "Questions" label position using layout geometry and roll section bottom
+    label_x, label_y = calculate_questions_label_position(geom, layout, sheet, roll_bottom)
     if label_x > 0 and label_y > 0:  # Valid position found
         content.draw_text(label_x, label_y, "Questions")
 
@@ -289,13 +313,13 @@ def generate_omr_sheet(output_path: Path) -> None:
     content = PDFContent()
 
     # Generate bubble coordinates procedurally
-    roll_bubbles, question_bubbles = generate_all_bubble_coordinates(geom, layout, sheet)
+    roll_bubbles, question_bubbles, roll_bottom = generate_all_bubble_coordinates(geom, layout, sheet)
 
     # Draw all components
     draw_anchor_markers(content, geom, markers)
     draw_grid_markers(content, geom, markers)
-    draw_roll_number_section(content, geom, layout, roll_bubbles)
-    draw_question_columns(content, geom, layout, sheet, question_bubbles)
+    draw_roll_number_section(content, geom, layout, sheet, roll_bubbles)
+    draw_question_columns(content, geom, layout, sheet, question_bubbles, roll_bottom)
 
     build_pdf(geom.width, geom.height, content.render(), output_path)
 

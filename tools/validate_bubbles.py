@@ -176,7 +176,7 @@ def validate_bubbles(image_path: Path, output_path: Path) -> None:
     print(f"PDF dimensions: {geom.width}x{geom.height} points")
 
     # Generate expected bubble coordinates
-    roll_bubbles, question_bubbles = generate_all_bubble_coordinates(geom, layout, sheet)
+    roll_bubbles, question_bubbles, _ = generate_all_bubble_coordinates(geom, layout, sheet)
     all_bubbles = roll_bubbles + question_bubbles
 
     # Convert PDF coordinates to image coordinates

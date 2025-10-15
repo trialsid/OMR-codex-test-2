@@ -62,7 +62,7 @@ def profile_analyze_bubble_fill():
     print(f"Image size: {w}×{h} = {w*h:,} pixels")
 
     # Generate real bubble coordinates
-    roll_coords, question_coords = generate_all_bubble_coordinates(geom, layout, sheet)
+    roll_coords, question_coords, _ = generate_all_bubble_coordinates(geom, layout, sheet)
     all_coords = roll_coords + question_coords
     total_bubbles = len(all_coords)
 
