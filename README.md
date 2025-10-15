@@ -2,6 +2,17 @@
 
 A robust Optical Mark Recognition (OMR) system for processing multiple-choice exam answer sheets. Generates customizable OMR sheets and accurately detects filled bubbles even under challenging real-world conditions like poor lighting, perspective distortion, and varying scan quality.
 
+<table align="center">
+  <tr>
+    <td><img src="sheets/omr_sheet.png" width="400" alt="Blank OMR Sheet"></td>
+    <td><img src="processed/processed_omr_sheet.png" width="400" alt="Processed OMR Sheet"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Blank OMR Sheet</b></td>
+    <td align="center"><b>Processed Result</b></td>
+  </tr>
+</table>
+
 ## Features
 
 ### 🎯 Accurate Bubble Detection

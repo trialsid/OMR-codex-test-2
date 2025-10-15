@@ -9,8 +9,9 @@ __pycache__/
 sheets/*
 !sheets/omr_sheet.png
 
-# Processed OMR sheets
+# Processed OMR sheets (except processed_omr_sheet.png)
 processed/
+!processed/processed_omr_sheet.png
 
 # Distortion test outputs
 distortion_tests/
