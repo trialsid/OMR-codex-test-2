@@ -289,7 +289,8 @@ def calculate_adaptive_fill_threshold(gray: np.ndarray, base_threshold: float = 
     """Calculate adaptive fill threshold based on image contrast profile.
 
     Args:
-        gray: Grayscale image of the corrected sheet
+        gray: Grayscale image of the bubble region (should exclude anchor markers
+              and margins to avoid skewing percentiles)
         base_threshold: Base threshold for normal contrast conditions
 
     Returns:
@@ -310,12 +311,14 @@ def calculate_adaptive_fill_threshold(gray: np.ndarray, base_threshold: float = 
     # Adjust threshold based on available contrast
     # Less contrast = lower threshold needed to detect filled bubbles
     # More contrast = can use higher threshold for better discrimination
+    # More aggressive reduction for low contrast to handle overexposed images
+    # where printed text may skew percentiles
     if contrast_factor < 0.3:  # Very low contrast (e.g., overexposed)
-        adjusted_threshold = base_threshold * 0.5  # Lower threshold significantly
+        adjusted_threshold = base_threshold * 0.3  # More aggressive (was 0.5)
     elif contrast_factor < 0.5:  # Moderate low contrast
-        adjusted_threshold = base_threshold * 0.7
+        adjusted_threshold = base_threshold * 0.6  # More aggressive (was 0.7)
     elif contrast_factor < 0.7:  # Slightly reduced contrast
-        adjusted_threshold = base_threshold * 0.85
+        adjusted_threshold = base_threshold * 0.8  # More aggressive (was 0.85)
     else:  # Normal or high contrast
         adjusted_threshold = base_threshold
 
@@ -433,8 +436,9 @@ def sample_bubbles_from_coordinates(
     if inner_gray.size == 0:
         return [[] for _ in range(sheet.roll_rows)], []
 
-    # Calculate adaptive fill threshold based on sheet's contrast profile
-    adaptive_threshold = calculate_adaptive_fill_threshold(gray, layout.fill_threshold)
+    # Calculate adaptive fill threshold based on inner region's contrast profile
+    # Use inner_gray to exclude anchor markers which would skew percentiles
+    adaptive_threshold = calculate_adaptive_fill_threshold(inner_gray, layout.fill_threshold)
 
     # Process roll bubbles
     roll_groups: List[List[Bubble]] = [[] for _ in range(sheet.roll_rows)]
