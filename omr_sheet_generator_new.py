@@ -68,6 +68,18 @@ def _ellipse(
     pdf.ellipse(x, geom.height - y - height, width, height, style=style)
 
 
+def _line(
+    pdf: OMRPDF,
+    geom: PageGeometry,
+    x1: float,
+    y1: float,
+    x2: float,
+    y2: float,
+) -> None:
+    """Draw a line using bottom-left coordinates."""
+    pdf.line(x1, geom.height - y1, x2, geom.height - y2)
+
+
 def draw_anchor_markers(pdf: OMRPDF, geom: PageGeometry, markers: MarkerConfig) -> None:
     inset = geom.margin / 2
     positions = [
@@ -145,6 +157,19 @@ def draw_roll_number_section(
     gap_before_bubble = 5
     rows_seen = set()
 
+    # Find the topmost and bottommost bubble y-coordinates
+    min_y = min(bubble.y - bubble.radius for bubble in bubbles)
+    max_y = max(bubble.y + bubble.radius for bubble in bubbles)
+
+    # Draw vertical lines on either side of the label column
+    left_line_x = geom.margin
+    right_line_x = geom.margin + layout.label_column_width
+    pdf.set_draw_color(192, 192, 192)  # Light grey
+    pdf.set_line_width(1)
+    _line(pdf, geom, left_line_x, min_y, left_line_x, max_y)
+    _line(pdf, geom, right_line_x, min_y, right_line_x, max_y)
+    pdf.set_draw_color(0, 0, 0)  # Reset to black
+
     for bubble in bubbles:
         if bubble.row is not None and bubble.row not in rows_seen:
             label_end_x = geom.margin + layout.label_column_width - gap_before_bubble
@@ -209,6 +234,33 @@ def draw_question_columns(
             max_question_per_column.get(bubble.question_column, 0),
             bubble.question,
         )
+
+    # Calculate min and max y-coordinates for each question column
+    column_y_ranges: dict[int, tuple[float, float]] = {}
+    for bubble in bubbles:
+        if bubble.question_column is None:
+            continue
+        col = bubble.question_column
+        min_y = bubble.y - bubble.radius
+        max_y = bubble.y + bubble.radius
+        if col in column_y_ranges:
+            column_y_ranges[col] = (
+                min(column_y_ranges[col][0], min_y),
+                max(column_y_ranges[col][1], max_y),
+            )
+        else:
+            column_y_ranges[col] = (min_y, max_y)
+
+    # Draw vertical lines on either side of each label column
+    pdf.set_draw_color(192, 192, 192)  # Light grey
+    pdf.set_line_width(1)
+    for col, (min_y, max_y) in column_y_ranges.items():
+        column_origin = geom.margin + col * layout.group_width(sheet.question_options)
+        left_line_x = column_origin
+        right_line_x = column_origin + layout.label_column_width
+        _line(pdf, geom, left_line_x, min_y, left_line_x, max_y)
+        _line(pdf, geom, right_line_x, min_y, right_line_x, max_y)
+    pdf.set_draw_color(0, 0, 0)  # Reset to black
 
     pdf.set_font("Helvetica", size=12)
     digit_width = 6.5
