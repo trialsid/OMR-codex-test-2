@@ -242,10 +242,25 @@ def correct_skew(image: np.ndarray, markers: List[Tuple[int, int]], geom: PageGe
     output_width = int(round(geom.width * scale))
     output_height = int(round(geom.height * scale))
 
-    # Clamp to reasonable bounds (min: avoid tiny images, max: don't exceed source)
+    # Clamp to reasonable bounds while preserving aspect ratio
     img_height, img_width = image.shape[:2]
-    output_width = max(800, min(output_width, img_width))
-    output_height = max(1000, min(output_height, img_height))
+
+    # First apply maximum bounds (don't exceed source)
+    output_width = min(output_width, img_width)
+    output_height = min(output_height, img_height)
+
+    # Then apply minimum bounds while preserving aspect ratio
+    min_width = 800
+    min_height = 1000
+    aspect_ratio = geom.width / geom.height
+
+    if output_width < min_width:
+        output_width = min_width
+        output_height = int(round(output_width / aspect_ratio))
+
+    if output_height < min_height:
+        output_height = min_height
+        output_width = int(round(output_height * aspect_ratio))
 
     # Source points (detected markers)
     src_points = np.float32(markers)
@@ -264,7 +279,7 @@ def correct_skew(image: np.ndarray, markers: List[Tuple[int, int]], geom: PageGe
     # Apply transformation
     corrected = cv2.warpPerspective(image, matrix, (output_width, output_height))
 
-    print(f"Applied perspective correction: {img_width}x{img_height} → {output_width}x{output_height} (scale: {scale:.2f}x)")
+    print(f"Applied perspective correction: {img_width}x{img_height} -> {output_width}x{output_height} (scale: {scale:.2f}x)")
 
     return corrected
 
