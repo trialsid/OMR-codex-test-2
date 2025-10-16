@@ -15,7 +15,7 @@ from typing import List, Tuple, Optional
 import numpy as np
 import cv2
 
-from omr_config import PageGeometry, BubbleLayout, SheetLayout
+from omr_config import PageGeometry, BubbleLayout, SheetLayout, MarkerConfig
 from omr_layout import generate_all_bubble_coordinates, BubbleCoordinate
 
 
@@ -165,6 +165,7 @@ def validate_bubbles(image_path: Path, output_path: Path) -> None:
     geom = PageGeometry()
     layout = BubbleLayout()
     sheet = SheetLayout()
+    markers = MarkerConfig()
 
     # Load image
     image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
@@ -176,7 +177,7 @@ def validate_bubbles(image_path: Path, output_path: Path) -> None:
     print(f"PDF dimensions: {geom.width}x{geom.height} points")
 
     # Generate expected bubble coordinates
-    roll_bubbles, question_bubbles, _ = generate_all_bubble_coordinates(geom, layout, sheet)
+    roll_bubbles, question_bubbles, _ = generate_all_bubble_coordinates(geom, layout, sheet, markers)
     all_bubbles = roll_bubbles + question_bubbles
 
     # Convert PDF coordinates to image coordinates

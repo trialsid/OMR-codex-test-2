@@ -400,7 +400,7 @@ def process_distorted_image(
             return False, f"Only detected {anchors_detected}/4 anchors", anchors_detected, 0, 0, None, anchor_viz
 
         # Correct skew
-        corrected = correct_skew(image, anchor_points, geom)
+        corrected = correct_skew(image, anchor_points, geom, markers_cfg)
 
         # Sample bubbles
         roll_groups, question_groups = sample_bubbles_from_coordinates(

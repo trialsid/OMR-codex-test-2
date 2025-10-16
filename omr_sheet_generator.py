@@ -95,14 +95,40 @@ def draw_anchor_markers(content: PDFContent, geom: PageGeometry, markers: Marker
         content.fill_rect(x, y, markers.anchor_size, markers.anchor_size)
 
 
-def draw_grid_markers(content: PDFContent, geom: PageGeometry, markers: MarkerConfig) -> None:
-    start_y = geom.margin + markers.grid_spacing
-    end_y = geom.height - geom.margin - markers.grid_spacing
-    y_positions = list(_frange(start_y, end_y, markers.grid_spacing))
+def draw_grid_markers(
+    content: PDFContent,
+    geom: PageGeometry,
+    markers: MarkerConfig,
+    roll_bubbles: List[BubbleCoordinate],
+    question_bubbles: List[BubbleCoordinate],
+) -> None:
+    """Draw one grid marker per bubble row, with clearance from anchors."""
+    # Calculate anchor boundaries (in PDF coordinates, y increases upward)
+    vertical_inset = geom.margin / 2.0
+
+    # Bottom anchor top edge
+    bottom_anchor_top = vertical_inset + markers.anchor_size
+
+    # Top anchor bottom edge
+    top_anchor_bottom = geom.height - vertical_inset - markers.anchor_size
+
+    # Collect all unique bubble row y-coordinates
+    bubble_y_positions = set()
+    for bubble in roll_bubbles + question_bubbles:
+        bubble_y_positions.add(bubble.y)
+
+    # Filter positions that are too close to anchors (5-point clearance)
+    clearance = 5
+    valid_positions = sorted([
+        y for y in bubble_y_positions
+        if bottom_anchor_top + clearance <= y <= top_anchor_bottom - clearance
+    ])
+
+    # Draw grid markers at valid bubble row positions
     x_offsets = (geom.margin / 2, geom.width - geom.margin / 2 - markers.grid_marker_size)
 
     content.set_fill_color(0, 0, 0)
-    for y in y_positions:
+    for y in valid_positions:
         for x in x_offsets:
             content.fill_rect(x, y, markers.grid_marker_size, markers.grid_marker_size)
 
@@ -172,6 +198,7 @@ def draw_question_columns(
     geom: PageGeometry,
     layout: BubbleLayout,
     sheet: SheetLayout,
+    markers: MarkerConfig,
     bubbles: List[BubbleCoordinate],
     roll_bottom: float,
 ) -> None:
@@ -180,7 +207,7 @@ def draw_question_columns(
         return
 
     # Calculate "Questions" label position using layout geometry and roll section bottom
-    label_x, label_y = calculate_questions_label_position(geom, layout, sheet, roll_bottom)
+    label_x, label_y = calculate_questions_label_position(geom, layout, sheet, roll_bottom, markers)
     if label_x > 0 and label_y > 0:  # Valid position found
         content.draw_text(label_x, label_y, "Questions")
 
@@ -313,13 +340,13 @@ def generate_omr_sheet(output_path: Path) -> None:
     content = PDFContent()
 
     # Generate bubble coordinates procedurally
-    roll_bubbles, question_bubbles, roll_bottom = generate_all_bubble_coordinates(geom, layout, sheet)
+    roll_bubbles, question_bubbles, roll_bottom = generate_all_bubble_coordinates(geom, layout, sheet, markers)
 
     # Draw all components
     draw_anchor_markers(content, geom, markers)
-    draw_grid_markers(content, geom, markers)
+    draw_grid_markers(content, geom, markers, roll_bubbles, question_bubbles)
     draw_roll_number_section(content, geom, layout, sheet, roll_bubbles)
-    draw_question_columns(content, geom, layout, sheet, question_bubbles, roll_bottom)
+    draw_question_columns(content, geom, layout, sheet, markers, question_bubbles, roll_bottom)
 
     build_pdf(geom.width, geom.height, content.render(), output_path)
 
