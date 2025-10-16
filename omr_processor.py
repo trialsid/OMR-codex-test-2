@@ -18,7 +18,11 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from omr_config import PageGeometry, BubbleLayout, MarkerConfig, SheetLayout
-from omr_layout import generate_all_bubble_coordinates, BubbleCoordinate
+from omr_layout import (
+    BubbleCoordinate,
+    calculate_anchor_centers,
+    generate_all_bubble_coordinates,
+)
 
 
 @dataclass
@@ -75,7 +79,7 @@ def detect_anchor_markers(
     # Define corner bands (anchors should be in outer 25% of image)
     # Allows for realistic mobile captures with some margin around the sheet
     corner_band_x = img_width * 0.25
-    corner_band_y = img_height * 0.25
+    corner_band_y = img_height * 0.35
 
     # Find contours
     contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -206,37 +210,36 @@ def _validate_rectangle_geometry(
     return True
 
 
-def correct_skew(image: np.ndarray, markers: List[Tuple[int, int]], geom: PageGeometry) -> np.ndarray:
-    """Apply perspective transformation to correct skew.
+def correct_skew(
+    image: np.ndarray,
+    markers: List[Tuple[int, int]],
+    geom: PageGeometry,
+    markers_cfg: MarkerConfig,
+) -> np.ndarray:
+    """Apply perspective transformation to correct skew using shared anchor geometry."""
 
-    Args:
-        image: Input image
-        markers: Corner markers [top-left, top-right, bottom-left, bottom-right]
-        geom: Page geometry configuration
-
-    Returns:
-        Corrected image
-    """
-    # Calculate adaptive output dimensions based on detected marker distances
-    # This preserves original resolution quality instead of forcing 1400px
     tl, tr, bl, br = markers
 
-    # Measure actual pixel distances between markers
+    expected_centers = calculate_anchor_centers(geom, markers_cfg)
+    exp_tl = expected_centers["top_left"]
+    exp_tr = expected_centers["top_right"]
+    exp_bl = expected_centers["bottom_left"]
+    exp_br = expected_centers["bottom_right"]
+
+    bubble_width_pts = max(exp_tr[0] - exp_tl[0], 1e-6)
+    bubble_height_pts = max(exp_tl[1] - exp_bl[1], 1e-6)
+
     top_edge = np.linalg.norm(np.array(tr) - np.array(tl))
     bottom_edge = np.linalg.norm(np.array(br) - np.array(bl))
     left_edge = np.linalg.norm(np.array(bl) - np.array(tl))
     right_edge = np.linalg.norm(np.array(br) - np.array(tr))
 
-    # Average the opposing edges to get robust scale estimate
     avg_width_pixels = (top_edge + bottom_edge) / 2.0
     avg_height_pixels = (left_edge + right_edge) / 2.0
 
-    # Calculate scale factors from physical dimensions
-    scale_x = avg_width_pixels / geom.width
-    scale_y = avg_height_pixels / geom.height
-
-    # Use average scale to maintain aspect ratio
-    scale = (scale_x + scale_y) / 2.0
+    scale_x = avg_width_pixels / bubble_width_pts
+    scale_y = avg_height_pixels / bubble_height_pts
+    scale = max((scale_x + scale_y) / 2.0, 1e-6)
 
     # Compute output dimensions preserving the detected resolution
     output_width = int(round(geom.width * scale))
@@ -262,15 +265,15 @@ def correct_skew(image: np.ndarray, markers: List[Tuple[int, int]], geom: PageGe
         output_height = min_height
         output_width = int(round(output_height * aspect_ratio))
 
-    # Source points (detected markers)
-    src_points = np.float32(markers)
+    scale_x_out = output_width / geom.width if geom.width > 0 else 1.0
+    scale_y_out = output_height / geom.height if geom.height > 0 else 1.0
 
-    # Destination points (corrected corners)
+    src_points = np.float32(markers)
     dst_points = np.float32([
-        [0, 0],
-        [output_width - 1, 0],
-        [0, output_height - 1],
-        [output_width - 1, output_height - 1]
+        [exp_tl[0] * scale_x_out, output_height - exp_tl[1] * scale_y_out],
+        [exp_tr[0] * scale_x_out, output_height - exp_tr[1] * scale_y_out],
+        [exp_bl[0] * scale_x_out, output_height - exp_bl[1] * scale_y_out],
+        [exp_br[0] * scale_x_out, output_height - exp_br[1] * scale_y_out],
     ])
 
     # Compute perspective transform matrix
@@ -328,7 +331,6 @@ def calculate_adaptive_fill_threshold(gray: np.ndarray, base_threshold: float = 
 def _coordinate_to_bubble(
     coord: BubbleCoordinate,
     geom: PageGeometry,
-    markers: MarkerConfig,
     page_width: int,
     page_height: int,
     margin_x: int,
@@ -338,39 +340,21 @@ def _coordinate_to_bubble(
     adaptive_threshold: float,
 ) -> Optional[Bubble]:
     """Convert a PDF coordinate to pixel coordinates and sample fill state."""
-    # Calculate transformation from PDF to pixel space
-    anchor_inset_x = geom.margin / 2.0 + markers.anchor_size / 2.0
-    anchor_inset_y = geom.margin / 2.0 + markers.anchor_size / 2.0
-    effective_width = geom.width - 2.0 * anchor_inset_x
-    effective_height = geom.height - 2.0 * anchor_inset_y
 
-    if effective_width <= 0 or effective_height <= 0:
+    if geom.width <= 0 or geom.height <= 0:
         return None
 
-    scale_x = page_width / effective_width
+    scale_x = page_width / geom.width
+    scale_y = page_height / geom.height
 
-    # Transform PDF coordinates to relative position within effective area
-    rel_x = (coord.x - anchor_inset_x) / effective_width
-    rel_y = ((geom.height - anchor_inset_y) - coord.y) / effective_height
-
-    # Clamp to valid range
-    rel_x = min(max(rel_x, 0.0), 1.0)
-    rel_y = min(max(rel_y, 0.0), 1.0)
-
-    # Convert to absolute pixel coordinates
-    abs_x = int(round(rel_x * page_width))
-    abs_y = int(round(rel_y * page_height))
+    abs_x = int(round(coord.x * scale_x))
+    abs_y = int(round(page_height - coord.y * scale_y))
     abs_x = min(max(abs_x, 0), max(page_width - 1, 0))
     abs_y = min(max(abs_y, 0), max(page_height - 1, 0))
 
-    # Convert to inner image coordinates (after margin crop)
     inner_x = abs_x - margin_x
     inner_y = abs_y - margin_y
 
-    # Scale radius
-    radius = max(1, int(round(coord.radius * scale_x)))
-
-    # Check bounds
     if (
         inner_x < 0
         or inner_y < 0
@@ -379,7 +363,9 @@ def _coordinate_to_bubble(
     ):
         return None
 
-    # Analyze fill state using adaptive threshold
+    radius_scale = (scale_x + scale_y) / 2.0
+    radius = max(1, int(round(coord.radius * radius_scale)))
+
     is_filled, intensity = analyze_bubble_fill(
         inner_gray,
         inner_x,
@@ -415,26 +401,37 @@ def sample_bubbles_from_coordinates(
     height, width = corrected.shape[:2]
     gray = cv2.cvtColor(corrected, cv2.COLOR_BGR2GRAY) if corrected.ndim == 3 else corrected
 
-    # Calculate transformation parameters
-    anchor_inset_x = geom.margin / 2.0 + markers.anchor_size / 2.0
-    anchor_inset_y = geom.margin / 2.0 + markers.anchor_size / 2.0
-    effective_width = geom.width - 2.0 * anchor_inset_x
-    effective_height = geom.height - 2.0 * anchor_inset_y
+    scale_x = width / geom.width if geom.width > 0 else 1.0
+    scale_y = height / geom.height if geom.height > 0 else 1.0
 
-    if effective_width <= 0 or effective_height <= 0:
-        return [], []
+    centers = calculate_anchor_centers(geom, markers)
+    half_anchor = markers.anchor_size / 2.0
+    half_anchor_x = int(round(half_anchor * scale_x))
+    half_anchor_y = int(round(half_anchor * scale_y))
 
-    scale_x = width / effective_width
-    scale_y = height / effective_height
+    left_center_px = int(round(centers["bottom_left"][0] * scale_x))
+    right_center_px = int(round(centers["bottom_right"][0] * scale_x))
+    top_center_px = int(round(height - centers["top_left"][1] * scale_y))
+    bottom_center_px = int(round(height - centers["bottom_left"][1] * scale_y))
 
-    margin_after_crop_x = max(0.0, geom.margin - anchor_inset_x)
-    margin_after_crop_y = max(0.0, geom.margin - anchor_inset_y)
-    margin_x = int(round(margin_after_crop_x * scale_x))
-    margin_y = int(round(margin_after_crop_y * scale_y))
+    left_crop = max(0, left_center_px - half_anchor_x)
+    right_crop = min(width, right_center_px + half_anchor_x)
+    top_crop = max(0, top_center_px - half_anchor_y)
+    bottom_crop = min(height, bottom_center_px + half_anchor_y)
 
-    inner_gray = gray[margin_y: height - margin_y, margin_x: width - margin_x]
+    if right_crop <= left_crop or bottom_crop <= top_crop:
+        inner_gray = gray
+        margin_x = 0
+        margin_y = 0
+    else:
+        inner_gray = gray[top_crop:bottom_crop, left_crop:right_crop]
+        margin_x = left_crop
+        margin_y = top_crop
+
     if inner_gray.size == 0:
-        return [[] for _ in range(sheet.roll_rows)], []
+        inner_gray = gray
+        margin_x = 0
+        margin_y = 0
 
     # Calculate adaptive fill threshold based on inner region's contrast profile
     # Use inner_gray to exclude anchor markers which would skew percentiles
@@ -444,7 +441,15 @@ def sample_bubbles_from_coordinates(
     roll_groups: List[List[Bubble]] = [[] for _ in range(sheet.roll_rows)]
     for coord in roll_coords:
         bubble = _coordinate_to_bubble(
-            coord, geom, markers, width, height, margin_x, margin_y, inner_gray, layout, adaptive_threshold
+            coord,
+            geom,
+            width,
+            height,
+            margin_x,
+            margin_y,
+            inner_gray,
+            layout,
+            adaptive_threshold,
         )
         if bubble is not None and coord.row is not None:
             roll_groups[coord.row].append(bubble)
@@ -458,7 +463,15 @@ def sample_bubbles_from_coordinates(
 
     for coord in question_coords:
         bubble = _coordinate_to_bubble(
-            coord, geom, markers, width, height, margin_x, margin_y, inner_gray, layout, adaptive_threshold
+            coord,
+            geom,
+            width,
+            height,
+            margin_x,
+            margin_y,
+            inner_gray,
+            layout,
+            adaptive_threshold,
         )
         if bubble is not None and coord.question is not None and coord.option_index is not None:
             question_map.setdefault(coord.question, []).append((coord.option_index, bubble))
@@ -655,7 +668,7 @@ def process_omr_sheet(
     print(f"Detected and validated {len(anchor_points)} anchor markers")
 
     # Correct skew
-    corrected = correct_skew(image, anchor_points, geom)
+    corrected = correct_skew(image, anchor_points, geom, markers_cfg)
 
     # Sample bubbles at procedurally generated coordinates
     roll_groups, question_groups = sample_bubbles_from_coordinates(
