@@ -20,6 +20,7 @@ from typing import List, Optional, Tuple
 from omr_config import PageGeometry, BubbleLayout, MarkerConfig, SheetLayout
 from omr_layout import (
     BubbleCoordinate,
+    BubbleGroup,
     calculate_anchor_centers,
     generate_all_bubble_coordinates,
 )
@@ -39,6 +40,22 @@ class Bubble:
         if abs(self.y - other.y) > 10:  # Same row tolerance
             return self.y < other.y
         return self.x < other.x
+
+
+@dataclass
+class BubbleDetection:
+    """Pairing between a layout coordinate and a sampled bubble."""
+
+    layout: BubbleCoordinate
+    bubble: Bubble
+
+
+@dataclass
+class BubbleGroupSample:
+    """Detected bubbles organized by their originating layout group."""
+
+    group: BubbleGroup
+    detections: List[BubbleDetection]
 
 
 def detect_anchor_markers(
@@ -390,14 +407,14 @@ def sample_bubbles_from_coordinates(
     layout: BubbleLayout,
     sheet: SheetLayout,
     markers: MarkerConfig,
-) -> Tuple[List[List[Bubble]], List[List[Bubble]]]:
+) -> List[BubbleGroupSample]:
     """Generate bubble coordinates procedurally and sample their fill states."""
 
     if corrected.size == 0:
-        return [], []
+        return []
 
     # Generate bubble coordinates using shared logic
-    roll_coords, _, question_coords, _ = generate_all_bubble_coordinates(geom, layout, sheet, markers)
+    layout_groups, _, _ = generate_all_bubble_coordinates(geom, layout, sheet, markers)
 
     height, width = corrected.shape[:2]
     gray = cv2.cvtColor(corrected, cv2.COLOR_BGR2GRAY) if corrected.ndim == 3 else corrected
@@ -438,50 +455,29 @@ def sample_bubbles_from_coordinates(
     # Use inner_gray to exclude anchor markers which would skew percentiles
     adaptive_threshold = calculate_adaptive_fill_threshold(inner_gray, layout.fill_threshold)
 
-    # Process roll bubbles
-    roll_groups: List[List[Bubble]] = [[] for _ in range(sheet.roll_rows)]
-    for coord in roll_coords:
-        bubble = _coordinate_to_bubble(
-            coord,
-            geom,
-            width,
-            height,
-            margin_x,
-            margin_y,
-            inner_gray,
-            layout,
-            adaptive_threshold,
-        )
-        if bubble is not None and coord.row is not None:
-            roll_groups[coord.row].append(bubble)
+    group_samples: List[BubbleGroupSample] = []
 
-    for group in roll_groups:
-        group.sort(key=lambda b: b.x)
+    for group in layout_groups:
+        detections: List[BubbleDetection] = []
+        for coord in group.bubbles:
+            bubble = _coordinate_to_bubble(
+                coord,
+                geom,
+                width,
+                height,
+                margin_x,
+                margin_y,
+                inner_gray,
+                layout,
+                adaptive_threshold,
+            )
+            if bubble is not None:
+                detections.append(BubbleDetection(layout=coord, bubble=bubble))
 
-    # Process question bubbles
-    question_groups: List[List[Bubble]] = []
-    question_map: dict[int, List[tuple[int, Bubble]]] = {}
+        detections.sort(key=lambda item: item.layout.index)
+        group_samples.append(BubbleGroupSample(group=group, detections=detections))
 
-    for coord in question_coords:
-        bubble = _coordinate_to_bubble(
-            coord,
-            geom,
-            width,
-            height,
-            margin_x,
-            margin_y,
-            inner_gray,
-            layout,
-            adaptive_threshold,
-        )
-        if bubble is not None and coord.question is not None and coord.option_index is not None:
-            question_map.setdefault(coord.question, []).append((coord.option_index, bubble))
-
-    for question_number in sorted(question_map):
-        ordered = sorted(question_map[question_number], key=lambda item: item[0])
-        question_groups.append([bubble for _, bubble in ordered])
-
-    return roll_groups, question_groups
+    return group_samples
 
 def analyze_bubble_fill(gray: np.ndarray, x: int, y: int, radius: int, threshold: float) -> Tuple[bool, float]:
     """Analyze whether a bubble is filled by comparing interior to background ring.
@@ -551,76 +547,61 @@ def analyze_bubble_fill(gray: np.ndarray, x: int, y: int, radius: int, threshold
     return is_filled, fill_intensity
 
 
-def overlay_labels(image: np.ndarray, roll_groups: List[List[Bubble]],
-                   question_groups: List[List[Bubble]], sheet: SheetLayout) -> np.ndarray:
-    """Overlay question numbers and option labels on bubbles.
+def overlay_labels(image: np.ndarray, group_samples: List[BubbleGroupSample]) -> np.ndarray:
+    """Overlay group and option labels on detected bubbles."""
 
-    Args:
-        image: Image to draw on
-        roll_groups: Roll number bubble groups
-        question_groups: Question bubble groups
-        sheet: Sheet layout configuration
-
-    Returns:
-        Image with labels overlaid
-    """
     output = image.copy()
 
     # First pass: Draw pink highlights for all filled bubbles
     pink_color = (255, 0, 255)  # Bright magenta/pink in BGR
-    for row_bubbles in roll_groups:
-        for bubble in row_bubbles:
+    for sample in group_samples:
+        for detection in sample.detections:
+            bubble = detection.bubble
             if bubble.is_filled:
                 cv2.circle(output, (bubble.x, bubble.y), bubble.radius + 2, pink_color, 2)
 
-    for question_bubbles in question_groups:
-        for bubble in question_bubbles:
-            if bubble.is_filled:
-                cv2.circle(output, (bubble.x, bubble.y), bubble.radius + 2, pink_color, 2)
+    # Second pass: Render textual labels based on group category
+    for sample in group_samples:
+        if not sample.detections:
+            continue
 
-    # Second pass: Label roll numbers (digits 0-9 for each of 3 columns)
-    for row_idx, row_bubbles in enumerate(roll_groups):
-        digit = row_idx % 10
-        for bubble in row_bubbles:
-            # Draw digit inside bubble
-            text = str(digit)
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            font_scale = 0.4
-            thickness = 1
-            text_size = cv2.getTextSize(text, font, font_scale, thickness)[0]
-            text_x = bubble.x - text_size[0] // 2
-            text_y = bubble.y + text_size[1] // 2
-            cv2.putText(output, text, (text_x, text_y), font, font_scale, (255, 0, 0), thickness)
-
-    # Third pass: Label questions (A, B, C, ...)
-    option_labels = [chr(ord('A') + idx) for idx in range(sheet.question_options)]
-    for q_idx, question_bubbles in enumerate(question_groups):
-        question_num = q_idx + 1
-
-        for opt_idx, bubble in enumerate(question_bubbles):
-            if opt_idx >= len(option_labels):
-                continue
-
-            # Draw question number above first bubble
-            if opt_idx == 0:
-                q_text = f"Q{question_num}"
+        if sample.group.category == "roll":
+            for detection in sample.detections:
+                text = detection.layout.label
                 font = cv2.FONT_HERSHEY_SIMPLEX
-                font_scale = 0.35
+                font_scale = 0.4
                 thickness = 1
-                text_size = cv2.getTextSize(q_text, font, font_scale, thickness)[0]
-                text_x = bubble.x - text_size[0] // 2
-                text_y = bubble.y - bubble.radius - 5
-                cv2.putText(output, q_text, (text_x, text_y), font, font_scale, (0, 0, 255), thickness)
-
-            # Draw option label inside bubble
-            option_text = option_labels[opt_idx]
+                text_size = cv2.getTextSize(text, font, font_scale, thickness)[0]
+                text_x = detection.bubble.x - text_size[0] // 2
+                text_y = detection.bubble.y + text_size[1] // 2
+                cv2.putText(output, text, (text_x, text_y), font, font_scale, (255, 0, 0), thickness)
+        else:
+            # Draw question label above the first bubble in the group
+            first_detection = sample.detections[0]
+            q_text = f"Q{sample.group.display_label}"
             font = cv2.FONT_HERSHEY_SIMPLEX
-            font_scale = 0.4
+            font_scale = 0.35
             thickness = 1
-            text_size = cv2.getTextSize(option_text, font, font_scale, thickness)[0]
-            text_x = bubble.x - text_size[0] // 2
-            text_y = bubble.y + text_size[1] // 2
-            cv2.putText(output, option_text, (text_x, text_y), font, font_scale, (0, 128, 0), thickness)
+            text_size = cv2.getTextSize(q_text, font, font_scale, thickness)[0]
+            text_x = first_detection.bubble.x - text_size[0] // 2
+            text_y = first_detection.bubble.y - first_detection.bubble.radius - 5
+            cv2.putText(output, q_text, (text_x, text_y), font, font_scale, (0, 0, 255), thickness)
+
+            # Draw option label inside each bubble
+            for detection in sample.detections:
+                option_text = detection.layout.label
+                option_size = cv2.getTextSize(option_text, font, 0.4, thickness)[0]
+                text_x = detection.bubble.x - option_size[0] // 2
+                text_y = detection.bubble.y + option_size[1] // 2
+                cv2.putText(
+                    output,
+                    option_text,
+                    (text_x, text_y),
+                    font,
+                    0.4,
+                    (0, 128, 0),
+                    thickness,
+                )
 
     return output
 
@@ -672,15 +653,21 @@ def process_omr_sheet(
     corrected = correct_skew(image, anchor_points, geom, markers_cfg)
 
     # Sample bubbles at procedurally generated coordinates
-    roll_groups, question_groups = sample_bubbles_from_coordinates(
+    group_samples = sample_bubbles_from_coordinates(
         corrected,
         geom,
         layout,
         sheet,
         markers_cfg,
     )
-    total_roll_bubbles = sum(len(group) for group in roll_groups)
-    total_questions = len(question_groups)
+    total_roll_bubbles = sum(
+        len(sample.detections)
+        for sample in group_samples
+        if sample.group.category == "roll"
+    )
+    total_questions = sum(
+        1 for sample in group_samples if sample.group.category == "question"
+    )
     print(
         f"Sampled {total_roll_bubbles} roll bubbles "
         f"and {total_questions} questions"
@@ -691,7 +678,7 @@ def process_omr_sheet(
         return False
 
     # Overlay labels
-    labeled = overlay_labels(corrected, roll_groups, question_groups, sheet)
+    labeled = overlay_labels(corrected, group_samples)
 
     # Save output
     output_path.parent.mkdir(parents=True, exist_ok=True)

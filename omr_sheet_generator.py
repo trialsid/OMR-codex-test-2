@@ -10,7 +10,6 @@ The resulting PDF is saved inside the ``sheets/`` directory.
 """
 from __future__ import annotations
 
-import string
 from io import BytesIO
 from pathlib import Path
 from typing import Iterable, List
@@ -18,7 +17,8 @@ from typing import Iterable, List
 from omr_config import PageGeometry, BubbleLayout, MarkerConfig, SheetLayout
 from omr_layout import (
     generate_all_bubble_coordinates,
-    BubbleCoordinate,
+    BubbleGroup,
+    BoxCoordinate,
     calculate_roll_label_position,
     calculate_questions_label_position,
 )
@@ -99,8 +99,7 @@ def draw_grid_markers(
     content: PDFContent,
     geom: PageGeometry,
     markers: MarkerConfig,
-    roll_bubbles: List[BubbleCoordinate],
-    question_bubbles: List[BubbleCoordinate],
+    bubble_groups: List[BubbleGroup],
 ) -> None:
     """Draw one grid marker per bubble row, with clearance from anchors."""
     # Calculate anchor boundaries (in PDF coordinates, y increases upward)
@@ -114,8 +113,9 @@ def draw_grid_markers(
 
     # Collect all unique bubble row y-coordinates
     bubble_y_positions = set()
-    for bubble in roll_bubbles + question_bubbles:
-        bubble_y_positions.add(bubble.y)
+    for group in bubble_groups:
+        for bubble in group.bubbles:
+            bubble_y_positions.add(bubble.y)
 
     # Filter positions that are too close to anchors (5-point clearance)
     clearance = 5
@@ -137,38 +137,24 @@ def draw_roll_number_section(
     content: PDFContent,
     geom: PageGeometry,
     layout: BubbleLayout,
-    sheet: SheetLayout,
-    bubbles: List[BubbleCoordinate],
+    groups: List[BubbleGroup],
+    boxes: List[BoxCoordinate],
 ) -> None:
     """Draw roll number bubbles, labels, and write-in boxes at specified coordinates."""
-    if not bubbles:
+    if not groups:
         return
 
     # Calculate label position using layout geometry
     label_x, label_y = calculate_roll_label_position(geom, layout)
     content.draw_text(label_x, label_y, "Roll Number")
 
-    # Calculate geometry for write-in boxes (matching bubble positions)
-    top_y = geom.height - geom.margin - layout.diameter
-    left_padding = layout.column_padding / 2
-    x_start = geom.margin + layout.label_column_width + left_padding + layout.radius
-
-    # Draw write-in boxes for manual roll number entry
-    # Boxes occupy row 2 (between label at row 1 and first bubbles at row 3)
-    box_width = layout.diameter * 1.3
-    box_height = layout.diameter * 1.2  # Reduced height for better spacing
-    box_y_center = top_y - layout.vertical_gap * 2
-
     content.set_line_width(0.8)  # Thinner lines for subtlety
     content.set_stroke_color(0.5, 0.5, 0.5)  # Grey color
 
-    for col in range(sheet.roll_columns):
-        # Calculate x to match bubble column centers
-        box_x_center = x_start + col * (layout.diameter + layout.option_gap)
-        # Convert center to bottom-left corner for PDF rectangle
-        box_x = box_x_center - box_width / 2
-        box_y = box_y_center - box_height / 2
-        content.stroke_rect(box_x, box_y, box_width, box_height)
+    for box in boxes:
+        box_x = box.x - box.width / 2
+        box_y = box.y - box.height / 2
+        content.stroke_rect(box_x, box_y, box.width, box.height)
 
     content.set_line_width(1)
     content.set_stroke_color(0, 0, 0)
@@ -177,20 +163,18 @@ def draw_roll_number_section(
     digit_width = 6.5  # Approximate width of one digit in points
     gap_before_bubble = 5  # Minimum gap between label end and bubble edge
 
-    # Group bubbles by row for digit label placement
-    rows_seen = set()
-    for bubble in bubbles:
-        # Draw digit label (once per row, right-aligned)
-        if bubble.row is not None and bubble.row not in rows_seen:
-            # Right-align single digit (0-9)
-            label_end_x = geom.margin + layout.label_column_width - gap_before_bubble
-            digit_x = label_end_x - digit_width
-            digit_y = bubble.y - layout.radius / 2
-            content.draw_text(digit_x, digit_y, str(bubble.digit))
-            rows_seen.add(bubble.row)
+    label_end_x = geom.margin + layout.label_column_width - gap_before_bubble
 
-        # Draw bubble
-        content.stroke_circle(bubble.x, bubble.y, bubble.radius)
+    for group in groups:
+        if not group.bubbles:
+            continue
+
+        digit_x = label_end_x - digit_width
+        digit_y = group.bubbles[0].y - layout.radius / 2
+        content.draw_text(digit_x, digit_y, group.display_label)
+
+        for bubble in group.bubbles:
+            content.stroke_circle(bubble.x, bubble.y, bubble.radius)
 
 
 def draw_question_columns(
@@ -199,11 +183,11 @@ def draw_question_columns(
     layout: BubbleLayout,
     sheet: SheetLayout,
     markers: MarkerConfig,
-    bubbles: List[BubbleCoordinate],
+    groups: List[BubbleGroup],
     roll_bottom: float,
 ) -> None:
     """Draw question bubbles and labels at specified coordinates."""
-    if not bubbles:
+    if not groups:
         return
 
     # Calculate "Questions" label position using layout geometry and roll section bottom
@@ -216,38 +200,37 @@ def draw_question_columns(
 
     # Find topmost bubble per question_column for header placement
     topmost_per_column = {}
-    for bubble in bubbles:
-        if bubble.question_column is not None:
-            col = bubble.question_column
-            if col not in topmost_per_column or bubble.y > topmost_per_column[col]:
-                topmost_per_column[col] = bubble.y
+    column_reference: dict[int, BubbleGroup] = {}
+    for group in groups:
+        if group.column_index is None:
+            continue
+        column_reference.setdefault(group.column_index, group)
+        for bubble in group.bubbles:
+            if group.column_index not in topmost_per_column or bubble.y > topmost_per_column[group.column_index]:
+                topmost_per_column[group.column_index] = bubble.y
 
     # Draw option headers (A, B, C, D) above each column
     for col, top_y in topmost_per_column.items():
-        column_origin = geom.margin + col * layout.group_width(sheet.question_options)
-        x_base = column_origin + layout.label_column_width + layout.column_padding / 2
+        group = column_reference.get(col)
+        if not group:
+            continue
 
         # Position headers above topmost bubble with comfortable spacing
         header_y = top_y + layout.vertical_gap * 0.7
 
-        for opt in range(sheet.question_options):
-            # Calculate x exactly as bubbles do (matching omr_layout.py logic)
-            x = x_base + layout.radius + opt * (layout.diameter + layout.option_gap)
-            letter = string.ascii_uppercase[opt]
-
-            # Center text horizontally on bubble (adjust x by ~half char width)
+        for bubble in group.bubbles:
             text_offset = 3.25  # Approximate half-width of a letter at size 10
-            content.draw_text(x - text_offset, header_y, letter, size=10)
+            content.draw_text(bubble.x - text_offset, header_y, bubble.label, size=10)
 
     # First pass: find max question number per column
     max_question_per_column = {}
-    for bubble in bubbles:
-        if bubble.question is not None and bubble.question_column is not None:
-            col = bubble.question_column
-            max_question_per_column[col] = max(
-                max_question_per_column.get(col, 0),
-                bubble.question
-            )
+    for group in groups:
+        if group.column_index is None:
+            continue
+        max_question_per_column[group.column_index] = max(
+            max_question_per_column.get(group.column_index, 0),
+            group.group_index,
+        )
 
     # Calculate max digits needed per column
     max_digits_per_column = {}
@@ -259,32 +242,21 @@ def draw_question_columns(
     gap_before_bubble = 5  # Minimum gap between label end and bubble edge
 
     # Group bubbles by question for label placement
-    questions_seen = set()
-    for bubble in bubbles:
-        # Draw question number label (once per question, on first option)
-        if bubble.question is not None and bubble.option_index == 0:
-            if bubble.question not in questions_seen:
-                # Calculate label position based on column, right-aligned
-                column_origin = geom.margin + (bubble.question_column or 0) * layout.group_width(sheet.question_options)
+    for group in groups:
+        if not group.bubbles:
+            continue
 
-                # Determine max digits for this column
-                max_digits = max_digits_per_column.get(bubble.question_column, 1)
+        column_origin = geom.margin + (group.column_index or 0) * layout.group_width(sheet.question_options)
+        max_digits = max_digits_per_column.get(group.column_index, 1)
 
-                # Calculate right-aligned position
-                # End of label area (before gap and bubbles)
-                label_end_x = column_origin + layout.label_column_width - gap_before_bubble
-                # Width of max-digit number in this column
-                max_text_width = max_digits * digit_width
-                # Start position for this specific label (right-aligned within max width)
-                current_text_width = len(str(bubble.question)) * digit_width
-                label_x = label_end_x - current_text_width
+        label_end_x = column_origin + layout.label_column_width - gap_before_bubble
+        current_text_width = len(group.display_label) * digit_width
+        label_x = label_end_x - current_text_width
+        label_y = group.bubbles[0].y - layout.radius / 2
+        content.draw_text(label_x, label_y, group.display_label)
 
-                label_y = bubble.y - layout.radius / 2
-                content.draw_text(label_x, label_y, str(bubble.question))
-                questions_seen.add(bubble.question)
-
-        # Draw bubble
-        content.stroke_circle(bubble.x, bubble.y, bubble.radius)
+        for bubble in group.bubbles:
+            content.stroke_circle(bubble.x, bubble.y, bubble.radius)
 
 
 def _frange(start: float, stop: float, step: float) -> Iterable[float]:
@@ -340,13 +312,15 @@ def generate_omr_sheet(output_path: Path) -> None:
     content = PDFContent()
 
     # Generate bubble coordinates procedurally
-    roll_bubbles, question_bubbles, roll_bottom = generate_all_bubble_coordinates(geom, layout, sheet, markers)
+    bubble_groups, roll_boxes, roll_bottom = generate_all_bubble_coordinates(geom, layout, sheet, markers)
+    roll_groups = [group for group in bubble_groups if group.category == "roll"]
+    question_groups = [group for group in bubble_groups if group.category == "question"]
 
     # Draw all components
     draw_anchor_markers(content, geom, markers)
-    draw_grid_markers(content, geom, markers, roll_bubbles, question_bubbles)
-    draw_roll_number_section(content, geom, layout, sheet, roll_bubbles)
-    draw_question_columns(content, geom, layout, sheet, markers, question_bubbles, roll_bottom)
+    draw_grid_markers(content, geom, markers, bubble_groups)
+    draw_roll_number_section(content, geom, layout, roll_groups, roll_boxes)
+    draw_question_columns(content, geom, layout, sheet, markers, question_groups, roll_bottom)
 
     build_pdf(geom.width, geom.height, content.render(), output_path)
 
