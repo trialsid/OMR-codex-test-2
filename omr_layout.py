@@ -6,7 +6,7 @@ used by both the generator (to draw PDF) and processor (to sample pixels).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List
+from typing import Dict, List, Tuple
 
 from omr_config import PageGeometry, BubbleLayout, MarkerConfig, SheetLayout
 
@@ -44,7 +44,7 @@ def generate_roll_bubble_coordinates(
     area_width = layout.label_column_width + layout.column_padding + bubble_span
     left_padding = layout.column_padding / 2
     x_start = geom.margin + layout.label_column_width + left_padding + layout.radius
-    top_y = geom.height - geom.margin - layout.diameter
+    top_y = geom.header_bottom - layout.diameter
 
     bubbles = []
     for row in range(sheet.roll_rows):
@@ -147,7 +147,7 @@ def calculate_roll_label_position(
 
     # Label occupies the first row in the grid (row 0)
     # Position at row center Y coordinate (matching Questions label positioning)
-    top_y = geom.height - geom.margin - layout.diameter
+    top_y = geom.header_bottom - layout.diameter
     label_y = top_y - layout.vertical_gap
 
     return label_x, label_y
@@ -168,7 +168,7 @@ def calculate_questions_label_position(
         (x, y) coordinates for the label, or (0, 0) if no valid position
     """
     # Use geometry to find the first question bubble
-    top_y = geom.height - geom.margin - layout.diameter
+    top_y = geom.header_bottom - layout.diameter
 
     # Generate row centers for questions
     row_centers: List[float] = []
@@ -199,6 +199,43 @@ def calculate_questions_label_position(
     label_y = topmost_bubble_y + layout.vertical_gap * 1.6
 
     return label_x, label_y
+
+
+def calculate_anchor_positions(
+    geom: PageGeometry, markers: MarkerConfig
+) -> Dict[str, Tuple[float, float]]:
+    """Calculate anchor marker positions shared by generator and processor."""
+
+    horizontal_inset = geom.margin / 2.0
+    vertical_inset = geom.margin / 2.0
+
+    left_x = horizontal_inset
+    right_x = geom.width - horizontal_inset - markers.anchor_size
+
+    header_bottom = geom.header_bottom
+    top_y = max(vertical_inset, header_bottom - vertical_inset - markers.anchor_size)
+    bottom_y = vertical_inset
+
+    return {
+        "top_left": (left_x, top_y),
+        "top_right": (right_x, top_y),
+        "bottom_left": (left_x, bottom_y),
+        "bottom_right": (right_x, bottom_y),
+    }
+
+
+def calculate_anchor_centers(
+    geom: PageGeometry, markers: MarkerConfig
+) -> Dict[str, Tuple[float, float]]:
+    """Return anchor marker center coordinates for geometric transforms."""
+
+    positions = calculate_anchor_positions(geom, markers)
+    half_size = markers.anchor_size / 2.0
+
+    return {
+        name: (x + half_size, y + half_size)
+        for name, (x, y) in positions.items()
+    }
 
 
 def generate_all_bubble_coordinates(

@@ -8,10 +8,12 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class PageGeometry:
-    """Page dimensions and margins."""
+    """Page dimensions, margins, and header sizing."""
+
     width: float = 595.276  # A4 width in points
     height: float = 841.89  # A4 height in points
     margin: float = 36
+    header_ratio: float = 0.2  # 20% of the page reserved for the header
 
     @property
     def inner_width(self) -> float:
@@ -20,6 +22,18 @@ class PageGeometry:
     @property
     def inner_height(self) -> float:
         return self.height - 2 * self.margin
+
+    @property
+    def header_height(self) -> float:
+        """Height of the header section in points."""
+
+        return self.height * self.header_ratio
+
+    @property
+    def header_bottom(self) -> float:
+        """Y coordinate marking the bottom edge of the header."""
+
+        return self.height - self.header_height
 
 
 @dataclass(frozen=True)
