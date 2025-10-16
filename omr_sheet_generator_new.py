@@ -91,9 +91,9 @@ def draw_header_section(pdf: OMRPDF, geom: PageGeometry) -> None:
     # Consistent padding at top and bottom edges of header
     header_padding = 12
 
-    # Account for title font height so padding is from top of text, not baseline
-    title_font_size = 18
-    header_top = geom.height - header_padding - title_font_size
+    # Account for school name font height so padding is from top of text, not baseline
+    school_font_size = 20
+    header_top = geom.height - header_padding - school_font_size
 
     pdf.set_fill_color(247, 248, 250)
     _rect(pdf, geom, 0, header_bottom, geom.width, header_height, style=RenderStyle.F)
@@ -103,27 +103,36 @@ def draw_header_section(pdf: OMRPDF, geom: PageGeometry) -> None:
     _line(pdf, geom, geom.margin, header_bottom, geom.width - geom.margin, header_bottom)
     pdf.set_draw_color(0, 0, 0)
 
-    # Title section - compact spacing
-    pdf.set_font("Helvetica", "B", title_font_size)
-    title = "OMR Answer Sheet"
-    title_width = pdf.get_string_width(title)
-    title_x = (geom.width - title_width) / 2
-    _text(pdf, geom, title_x, header_top, title)
+    # Title section - hierarchical flow
+    # 1. School name (large)
+    pdf.set_font("Helvetica", "B", school_font_size)
+    school_name = "St. Xavier's High School"
+    school_width = pdf.get_string_width(school_name)
+    school_x = (geom.width - school_width) / 2
+    _text(pdf, geom, school_x, header_top, school_name)
 
-    pdf.set_font("Helvetica", size=11)
-    exam_info = "Exam Date: _____________    Max Marks: _____________"
-    exam_width = pdf.get_string_width(exam_info)
+    # 2. Exam name (medium)
+    pdf.set_font("Helvetica", "B", 16)
+    exam_name = "Mid-Term Examination 2024"
+    exam_width = pdf.get_string_width(exam_name)
     exam_x = (geom.width - exam_width) / 2
-    _text(pdf, geom, exam_x, header_top - 20, exam_info)
+    _text(pdf, geom, exam_x, header_top - 24, exam_name)
+
+    # 3. OMR Answer Sheet (small)
+    pdf.set_font("Helvetica", size=12)
+    answer_sheet = "OMR Answer Sheet"
+    answer_width = pdf.get_string_width(answer_sheet)
+    answer_x = (geom.width - answer_width) / 2
+    _text(pdf, geom, answer_x, header_top - 42, answer_sheet)
 
     inner_width = geom.inner_width
-    gutter = 24
-    left_width = inner_width * 0.45
-    right_x = geom.margin + left_width + gutter
+    # Equal width sections with divider in the middle
+    divider_x = geom.margin + inner_width / 2
     left_x = geom.margin
-    divider_x = geom.margin + left_width + gutter / 2
+    left_width = inner_width / 2 - 8  # Small padding before divider
+    right_x = divider_x + 8  # Small padding after divider
 
-    content_top = header_top - 44
+    content_top = header_top - 58
     line_height = 14
 
     # Calculate bottom boundary to match top padding
