@@ -96,7 +96,7 @@ def draw_anchor_markers(pdf: OMRPDF, geom: PageGeometry, markers: MarkerConfig) 
 
 def draw_grid_markers(pdf: OMRPDF, geom: PageGeometry, markers: MarkerConfig) -> None:
     start_y = geom.margin + markers.grid_spacing
-    end_y = geom.height - geom.margin - markers.grid_spacing
+    end_y = geom.content_top - markers.grid_spacing
     y = start_y
 
     pdf.set_fill_color(0, 0, 0)
@@ -114,6 +114,76 @@ def draw_grid_markers(pdf: OMRPDF, geom: PageGeometry, markers: MarkerConfig) ->
         y += markers.grid_spacing
 
 
+def draw_header(pdf: OMRPDF, geom: PageGeometry) -> None:
+    """Render the header section containing title, metadata, and instructions."""
+
+    header_bottom = geom.header_bottom
+    header_top = geom.height - geom.margin
+    left = geom.margin
+    right = geom.width - geom.margin
+
+    # Header title
+    pdf.set_font("Helvetica", style="B", size=20)
+    title = "OMR ANSWER SHEET"
+    title_width = pdf.get_string_width(title)
+    title_x = (geom.width - title_width) / 2
+    title_y = header_top - 12
+    _text(pdf, geom, title_x, title_y, title)
+
+    # Exam detail row directly beneath the title
+    pdf.set_font("Helvetica", size=12)
+    exam_details = "Exam Date: ____________    Max Marks: ______"
+    details_width = pdf.get_string_width(exam_details)
+    details_x = (geom.width - details_width) / 2
+    details_y = title_y - 24
+    _text(pdf, geom, details_x, details_y, exam_details)
+
+    # Student details and instructions share the remaining header space
+    row_bottom = header_bottom + 12
+    row_height = 70
+    available_width = right - left
+    column_gap = 18
+    student_width = (available_width - column_gap) * 0.58
+    instructions_width = available_width - column_gap - student_width
+    student_x = left
+    instructions_x = student_x + student_width + column_gap
+
+    pdf.set_line_width(0.8)
+    pdf.set_draw_color(64, 64, 64)
+    _rect(pdf, geom, student_x, row_bottom, student_width, row_height)
+    _rect(pdf, geom, instructions_x, row_bottom, instructions_width, row_height)
+
+    pdf.set_font("Helvetica", size=11)
+    student_lines = [
+        "Student Name: ________________________________",
+        "Class / Section: _____________________________",
+    ]
+    student_text_y = row_bottom + row_height - 18
+    for idx, line in enumerate(student_lines):
+        line_y = student_text_y - idx * 20
+        _text(pdf, geom, student_x + 12, line_y, line)
+
+    pdf.set_font("Helvetica", style="B", size=11)
+    instructions_label_y = row_bottom + row_height - 18
+    _text(pdf, geom, instructions_x + 12, instructions_label_y, "Instructions:")
+    pdf.set_font("Helvetica", size=10)
+    instruction_lines = [
+        "1. Use blue or black ink to fill bubbles.",
+        "2. Darken bubbles completely without stray marks.",
+        "3. Do not fold, staple, or damage the sheet.",
+    ]
+    for idx, line in enumerate(instruction_lines, start=1):
+        line_y = instructions_label_y - idx * 16
+        _text(pdf, geom, instructions_x + 12, line_y, line)
+
+    # Divider delineating header from answer area
+    pdf.set_draw_color(0, 0, 0)
+    pdf.set_line_width(1)
+    _line(pdf, geom, left, header_bottom, right, header_bottom)
+
+    pdf.set_font("Helvetica", size=12)
+
+
 def draw_roll_number_section(
     pdf: OMRPDF,
     geom: PageGeometry,
@@ -128,7 +198,7 @@ def draw_roll_number_section(
     pdf.set_font("Helvetica", size=12)
     _text(pdf, geom, label_x, label_y, "Roll Number")
 
-    top_y = geom.height - geom.margin - layout.diameter
+    top_y = geom.content_top - layout.diameter
     left_padding = layout.column_padding / 2
     x_start = geom.margin + layout.label_column_width + left_padding + layout.radius
 
@@ -307,6 +377,7 @@ def generate_omr_sheet(output_path: Path) -> None:
         geom, layout, sheet
     )
 
+    draw_header(pdf, geom)
     draw_anchor_markers(pdf, geom, markers)
     draw_grid_markers(pdf, geom, markers)
     draw_roll_number_section(pdf, geom, layout, sheet, roll_bubbles)

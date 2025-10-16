@@ -44,7 +44,7 @@ def generate_roll_bubble_coordinates(
     area_width = layout.label_column_width + layout.column_padding + bubble_span
     left_padding = layout.column_padding / 2
     x_start = geom.margin + layout.label_column_width + left_padding + layout.radius
-    top_y = geom.height - geom.margin - layout.diameter
+    top_y = geom.content_top - layout.diameter
 
     bubbles = []
     for row in range(sheet.roll_rows):
@@ -147,7 +147,7 @@ def calculate_roll_label_position(
 
     # Label occupies the first row in the grid (row 0)
     # Position at row center Y coordinate (matching Questions label positioning)
-    top_y = geom.height - geom.margin - layout.diameter
+    top_y = geom.content_top - layout.diameter
     label_y = top_y - layout.vertical_gap
 
     return label_x, label_y
@@ -168,7 +168,7 @@ def calculate_questions_label_position(
         (x, y) coordinates for the label, or (0, 0) if no valid position
     """
     # Use geometry to find the first question bubble
-    top_y = geom.height - geom.margin - layout.diameter
+    top_y = geom.content_top - layout.diameter
 
     # Generate row centers for questions
     row_centers: List[float] = []
