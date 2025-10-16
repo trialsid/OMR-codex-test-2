@@ -32,8 +32,15 @@ class OMRPDF(FPDF):
         self.set_auto_page_break(False)
         # Disable default margins so all coordinates map 1:1 with layout points.
         self.set_margins(0, 0, 0)
+
+        # Register custom fonts
+        self.add_font("Stinger", "B", "fonts/StingerFitTrial-Bold.ttf")
+        self.add_font("Noto", "", "fonts/NotoSans-Regular.ttf")
+        self.add_font("Noto", "B", "fonts/NotoSans-Bold.ttf")
+        self.add_font("Noto", "I", "fonts/NotoSans-Italic.ttf")
+
         self.add_page()
-        self.set_font("Helvetica", size=12)
+        self.set_font("Noto", size=12)
 
 
 def _text(pdf: OMRPDF, geom: PageGeometry, x: float, y: float, text: str) -> None:
@@ -89,10 +96,10 @@ def draw_header_section(pdf: OMRPDF, geom: PageGeometry) -> None:
     header_height = geom.height - header_bottom
 
     # Consistent padding at top and bottom edges of header
-    header_padding = 12
+    header_padding = 6
 
     # Account for school name font height so padding is from top of text, not baseline
-    school_font_size = 20
+    school_font_size = 26
     header_top = geom.height - header_padding - school_font_size
 
     pdf.set_fill_color(247, 248, 250)
@@ -103,27 +110,34 @@ def draw_header_section(pdf: OMRPDF, geom: PageGeometry) -> None:
     _line(pdf, geom, geom.margin, header_bottom, geom.width - geom.margin, header_bottom)
     pdf.set_draw_color(0, 0, 0)
 
-    # Title section - hierarchical flow
-    # 1. School name (large)
-    pdf.set_font("Helvetica", "B", school_font_size)
+    # Title section - hierarchical flow (PaperGen style)
+    # 1. School name (large, Stinger font)
+    pdf.set_font("Stinger", "B", school_font_size)
     school_name = "St. Xavier's High School"
     school_width = pdf.get_string_width(school_name)
     school_x = (geom.width - school_width) / 2
     _text(pdf, geom, school_x, header_top, school_name)
 
-    # 2. Exam name (medium)
-    pdf.set_font("Helvetica", "B", 16)
+    # 2. Exam name (small, Noto italic)
+    pdf.set_font("Noto", "I", 14)
     exam_name = "Mid-Term Examination 2024"
     exam_width = pdf.get_string_width(exam_name)
     exam_x = (geom.width - exam_width) / 2
-    _text(pdf, geom, exam_x, header_top - 24, exam_name)
+    _text(pdf, geom, exam_x, header_top - 22, exam_name)
 
-    # 3. OMR Answer Sheet (small)
-    pdf.set_font("Helvetica", size=12)
+    # 3. OMR Answer Sheet (medium, Noto regular)
+    pdf.set_font("Noto", size=16)
     answer_sheet = "OMR Answer Sheet"
     answer_width = pdf.get_string_width(answer_sheet)
     answer_x = (geom.width - answer_width) / 2
     _text(pdf, geom, answer_x, header_top - 42, answer_sheet)
+
+    # Draw horizontal line after OMR Answer Sheet
+    line_y = header_top - 50
+    pdf.set_draw_color(185, 185, 185)
+    pdf.set_line_width(1.2)
+    _line(pdf, geom, geom.margin, line_y, geom.width - geom.margin, line_y)
+    pdf.set_draw_color(0, 0, 0)
 
     inner_width = geom.inner_width
     # Equal width sections with divider in the middle
@@ -132,19 +146,19 @@ def draw_header_section(pdf: OMRPDF, geom: PageGeometry) -> None:
     left_width = inner_width / 2 - 8  # Small padding before divider
     right_x = divider_x + 8  # Small padding after divider
 
-    content_top = header_top - 58
+    content_top = header_top - 66
     line_height = 14
 
     # Calculate bottom boundary to match top padding
     content_font_size = 10
     content_bottom = header_bottom + header_padding + content_font_size * 0.3
 
-    pdf.set_font("Helvetica", "B", 11)
+    pdf.set_font("Noto", "B", 11)
     _text(pdf, geom, left_x, content_top, "Student Details")
     pdf.set_line_width(0.6)
     pdf.set_draw_color(200, 200, 200)
 
-    pdf.set_font("Helvetica", size=content_font_size)
+    pdf.set_font("Noto", size=content_font_size)
     # Add empty row after header
     detail_y = content_top - line_height * 2
 
@@ -164,10 +178,10 @@ def draw_header_section(pdf: OMRPDF, geom: PageGeometry) -> None:
 
     pdf.set_line_width(1)
     pdf.set_draw_color(0, 0, 0)
-    pdf.set_font("Helvetica", "B", 11)
+    pdf.set_font("Noto", "B", 11)
     _text(pdf, geom, right_x, content_top, "Instructions")
 
-    pdf.set_font("Helvetica", size=10)
+    pdf.set_font("Noto", size=10)
     instructions = (
         "Use blue or black pen to fill bubbles.",
         "Shade only one option for each question.",
@@ -175,7 +189,7 @@ def draw_header_section(pdf: OMRPDF, geom: PageGeometry) -> None:
     )
     instr_y = content_top - line_height
     for instruction in instructions:
-        _text(pdf, geom, right_x, instr_y, f"- {instruction}")
+        _text(pdf, geom, right_x, instr_y, f"• {instruction}")
         instr_y -= line_height
 
     pdf.set_line_width(1)
@@ -258,7 +272,7 @@ def draw_roll_number_section(
     label_x, _ = calculate_roll_label_position(geom, layout)
     label_y = grid_top_y - layout.vertical_gap
 
-    pdf.set_font("Helvetica", size=12)
+    pdf.set_font("Noto", size=12)
     _text(pdf, geom, label_x, label_y, "Roll Number")
 
     # Draw write-in boxes using pre-generated coordinates
@@ -276,7 +290,7 @@ def draw_roll_number_section(
 
     pdf.set_line_width(1)
     pdf.set_draw_color(0, 0, 0)
-    pdf.set_font("Helvetica", size=12)
+    pdf.set_font("Noto", size=12)
 
     digit_width = 6.5
     gap_before_bubble = 5
@@ -327,7 +341,7 @@ def draw_question_columns(
 
     label_x, label_y = calculate_questions_label_position(geom, layout, sheet, roll_bottom, markers)
     if label_x > 0 and label_y > 0:
-        pdf.set_font("Helvetica", size=12)
+        pdf.set_font("Noto", size=12)
         _text(pdf, geom, label_x, label_y, "Questions")
 
     pdf.set_line_width(1)
@@ -342,7 +356,7 @@ def draw_question_columns(
             bubble.y,
         )
 
-    pdf.set_font("Helvetica", size=10)
+    pdf.set_font("Noto", size=10)
     for col, top_y in topmost_per_column.items():
         column_origin = geom.margin + col * layout.group_width(sheet.question_options)
         x_base = column_origin + layout.label_column_width + layout.column_padding / 2
@@ -388,7 +402,7 @@ def draw_question_columns(
         _line(pdf, geom, right_line_x, min_y, right_line_x, max_y)
     pdf.set_draw_color(0, 0, 0)  # Reset to black
 
-    pdf.set_font("Helvetica", size=12)
+    pdf.set_font("Noto", size=12)
     digit_width = 6.5
     gap_before_bubble = 5
     questions_seen = set()
