@@ -16,7 +16,7 @@ import numpy as np
 import cv2
 
 from omr_config import PageGeometry, BubbleLayout, SheetLayout, MarkerConfig
-from omr_layout import generate_all_bubble_coordinates, BubbleCoordinate
+from omr_layout import BubbleGroup, BubbleCoordinate, generate_all_bubble_coordinates
 
 
 def pdf_to_image_coords(
@@ -177,12 +177,16 @@ def validate_bubbles(image_path: Path, output_path: Path) -> None:
     print(f"PDF dimensions: {geom.width}x{geom.height} points")
 
     # Generate expected bubble coordinates
-    roll_bubbles, question_bubbles, _ = generate_all_bubble_coordinates(geom, layout, sheet, markers)
-    all_bubbles = roll_bubbles + question_bubbles
+    bubble_groups, _, _ = generate_all_bubble_coordinates(geom, layout, sheet, markers)
+    all_bubbles: List[tuple[BubbleGroup, BubbleCoordinate]] = [
+        (group, bubble)
+        for group in bubble_groups
+        for bubble in group.bubbles
+    ]
 
     # Convert PDF coordinates to image coordinates
     expected_circles = []
-    for bubble in all_bubbles:
+    for group, bubble in all_bubbles:
         img_x, img_y = pdf_to_image_coords(
             bubble.x, bubble.y, geom.height, img_height, img_width, geom.width
         )
@@ -245,13 +249,17 @@ def validate_bubbles(image_path: Path, output_path: Path) -> None:
         # Find bubble with max drift
         max_drift_idx = drifts.index(max_drift)
         max_exp_idx, max_det_idx, _ = matched_pairs[max_drift_idx]
-        max_bubble = all_bubbles[max_exp_idx]
+        max_group, max_bubble = all_bubbles[max_exp_idx]
 
         # Identify the bubble
-        if max_bubble.row is not None:
-            bubble_id = f"Roll(row={max_bubble.row}, col={max_bubble.column})"
+        if max_group.category == "roll":
+            bubble_id = (
+                f"Roll digit {max_group.display_label}, column {max_bubble.index}"
+            )
         else:
-            bubble_id = f"Question {max_bubble.question}, option {max_bubble.option_index}"
+            bubble_id = (
+                f"Question {max_group.display_label}, option {max_bubble.label}"
+            )
 
         print(f"  Max drift bubble: {bubble_id}")
 

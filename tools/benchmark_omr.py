@@ -107,7 +107,7 @@ def process_with_timing(
 
     # Sample bubbles
     t0 = time.perf_counter()
-    roll_groups, question_groups = sample_bubbles_from_coordinates(
+    group_samples = sample_bubbles_from_coordinates(
         corrected, geom, layout, sheet, markers_cfg
     )
     timing.sample_bubbles = time.perf_counter() - t0
@@ -115,7 +115,7 @@ def process_with_timing(
     # Overlay labels (if enabled)
     if overlay:
         t0 = time.perf_counter()
-        labeled = overlay_labels(corrected, roll_groups, question_groups, sheet)
+        labeled = overlay_labels(corrected, group_samples)
         timing.overlay_labels = time.perf_counter() - t0
     else:
         labeled = corrected

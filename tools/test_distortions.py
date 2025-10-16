@@ -405,15 +405,21 @@ def process_distorted_image(
         corrected = correct_skew(image, anchor_points, geom, markers_cfg)
 
         # Sample bubbles
-        roll_groups, question_groups = sample_bubbles_from_coordinates(
+        group_samples = sample_bubbles_from_coordinates(
             corrected, geom, layout, sheet, markers_cfg
         )
 
-        roll_bubbles = sum(len(group) for group in roll_groups)
-        questions = len(question_groups)
+        roll_bubbles = sum(
+            len(sample.detections)
+            for sample in group_samples
+            if sample.group.category == "roll"
+        )
+        questions = sum(
+            1 for sample in group_samples if sample.group.category == "question"
+        )
 
         # Overlay labels
-        labeled = overlay_labels(corrected, roll_groups, question_groups, sheet)
+        labeled = overlay_labels(corrected, group_samples)
 
         return True, "", anchors_detected, roll_bubbles, questions, labeled, anchor_viz
 

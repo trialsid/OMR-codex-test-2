@@ -3,35 +3,41 @@
 This module contains the shared logic for generating bubble positions,
 used by both the generator (to draw PDF) and processor (to sample pixels).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Dict, List, Literal, Tuple
 
 from omr_config import PageGeometry, BubbleLayout, MarkerConfig, SheetLayout
 
 
 @dataclass
 class BubbleCoordinate:
-    """Represents a bubble's position and metadata."""
+    """Represents a bubble's position, ordering and label."""
+
     x: float  # Absolute coordinate in PDF points
     y: float  # Absolute coordinate in PDF points
     radius: float  # Radius in PDF points
+    label: str  # Textual label rendered inside the bubble
+    index: int  # Order within the group (column/option index)
 
-    # Roll bubble metadata (None for question bubbles)
-    row: int | None = None
-    column: int | None = None
-    digit: int | None = None
 
-    # Question bubble metadata (None for roll bubbles)
-    question: int | None = None
-    option_index: int | None = None
-    question_column: int | None = None
+@dataclass
+class BubbleGroup:
+    """Collection of bubbles that share a label and behaviour."""
+
+    category: Literal["roll", "question"]
+    group_index: int  # Row index for roll, question number for questions
+    display_label: str  # Text rendered alongside the group (digit or question number)
+    bubbles: List[BubbleCoordinate]
+    column_index: int | None = None  # Question column, None for roll rows
 
 
 @dataclass
 class BoxCoordinate:
     """Represents a write-in box position in the roll number grid."""
+
     x: float  # Center x-coordinate in PDF points
     y: float  # Center y-coordinate in PDF points
     width: float  # Box width in PDF points
@@ -39,25 +45,21 @@ class BoxCoordinate:
     column: int  # Column index in the roll number grid
 
 
-def generate_roll_bubble_coordinates(
+def generate_roll_bubble_groups(
     geom: PageGeometry,
     layout: BubbleLayout,
     sheet: SheetLayout,
     markers: MarkerConfig,
-) -> tuple[List[BubbleCoordinate], List[BoxCoordinate], float, float, float]:
-    """Generate coordinates for roll number bubbles and write-in boxes.
+) -> tuple[List[BubbleGroup], List[BoxCoordinate], float, float]:
+    """Generate roll number bubble groups and write-in boxes."""
 
-    Returns:
-        (bubbles, boxes, top_y, area_width, bottom_y)
-    """
     bubble_span = sheet.roll_columns * layout.diameter
     bubble_span += (sheet.roll_columns - 1) * layout.option_gap
-    area_width = layout.label_column_width + layout.column_padding + bubble_span
     left_padding = layout.column_padding / 2
     x_start = geom.margin + layout.label_column_width + left_padding + layout.radius
 
     # Use centralized content zone calculation for consistency
-    content_top_y, content_bottom_y = calculate_content_zone(geom, markers, layout)
+    content_top_y, _ = calculate_content_zone(geom, markers, layout)
 
     # The label appears at top_y - vertical_gap, so adjust top_y accordingly
     top_y = content_top_y + layout.vertical_gap
@@ -68,63 +70,64 @@ def generate_roll_bubble_coordinates(
     box_height = layout.diameter * 1.2
     box_y = top_y - 2 * layout.vertical_gap
 
-    boxes = []
+    boxes: List[BoxCoordinate] = []
     for col in range(sheet.roll_columns):
         x = x_start + col * (layout.diameter + layout.option_gap)
-        boxes.append(BoxCoordinate(
-            x=x,
-            y=box_y,
-            width=box_width,
-            height=box_height,
-            column=col,
-        ))
-
-    # Generate bubbles at row 4+ of the grid
-    bubbles = []
-    for row in range(sheet.roll_rows):
-        # Shift bubbles down by 4 rows to make space for label (1 row) and write-in boxes (1 row)
-        # with proper spacing: row 0 = label header, row 1 = spacing, row 2 = boxes, row 3 = gap, row 4+ = bubbles
-        y = top_y - (row + 4) * layout.vertical_gap
-        for col in range(sheet.roll_columns):
-            x = x_start + col * (layout.diameter + layout.option_gap)
-            bubbles.append(BubbleCoordinate(
+        boxes.append(
+            BoxCoordinate(
                 x=x,
+                y=box_y,
+                width=box_width,
+                height=box_height,
+                column=col,
+            )
+        )
+
+    groups: List[BubbleGroup] = []
+    for row in range(sheet.roll_rows):
+        y = top_y - (row + 4) * layout.vertical_gap
+        digit = str(row % 10)
+        bubbles = [
+            BubbleCoordinate(
+                x=x_start + col * (layout.diameter + layout.option_gap),
                 y=y,
                 radius=layout.radius,
-                row=row,
-                column=col,
-                digit=row % 10,
-            ))
+                label=digit,
+                index=col,
+            )
+            for col in range(sheet.roll_columns)
+        ]
+        groups.append(
+            BubbleGroup(
+                category="roll",
+                group_index=row,
+                display_label=digit,
+                bubbles=bubbles,
+                column_index=None,
+            )
+        )
 
-    # Adjust bottom_y to account for the extra rows used by label and write-in boxes
     bottom_y = top_y - (sheet.roll_rows + 3) * layout.vertical_gap - layout.radius
-    return bubbles, boxes, top_y, area_width, bottom_y
+    return groups, boxes, top_y, bottom_y
 
 
-def generate_question_bubble_coordinates(
+def generate_question_bubble_groups(
     geom: PageGeometry,
     layout: BubbleLayout,
     sheet: SheetLayout,
     markers: MarkerConfig,
-    top_y: float,
-    x_start: float,
     roll_bottom: float,
-) -> List[BubbleCoordinate]:
-    """Generate coordinates for question bubbles.
+) -> List[BubbleGroup]:
+    """Generate question bubble groups."""
 
-    Args:
-        markers: Marker configuration for anchor-aware positioning
-        top_y: Top y-coordinate to start from
-        x_start: Left x-coordinate to start from
-        roll_bottom: Bottom edge of roll number section (for overlap avoidance)
-    """
     options = sheet.question_options
     column_width = layout.group_width(options)
-    available_width = geom.width - geom.margin - x_start
+    available_width = geom.width - geom.margin - geom.margin
     columns = max(1, int(available_width // column_width))
 
     # Use centralized content zone for bottom boundary
     content_top_y, content_bottom_y = calculate_content_zone(geom, markers, layout)
+    top_y = content_top_y + layout.vertical_gap
 
     # Determine all candidate row centers
     row_centers: List[float] = []
@@ -142,10 +145,12 @@ def generate_question_bubble_coordinates(
         len(row_centers),
     )
 
-    bubbles = []
+    groups: List[BubbleGroup] = []
     question_number = 1
+    ascii_offsets = [chr(ord("A") + opt) for opt in range(options)]
+
     for col in range(columns):
-        column_origin = x_start + col * column_width
+        column_origin = geom.margin + col * column_width
         x_base = column_origin + layout.label_column_width + layout.column_padding / 2
 
         if col == 0:
@@ -158,35 +163,38 @@ def generate_question_bubble_coordinates(
                 continue
 
         for y in row_centers[start_row:]:
-            for opt in range(options):
-                x = x_base + layout.radius + opt * (layout.diameter + layout.option_gap)
-                bubbles.append(BubbleCoordinate(
-                    x=x,
+            bubbles = [
+                BubbleCoordinate(
+                    x=x_base + layout.radius + opt * (layout.diameter + layout.option_gap),
                     y=y,
                     radius=layout.radius,
-                    question=question_number,
-                    option_index=opt,
-                    question_column=col,
-                ))
+                    label=ascii_offsets[opt],
+                    index=opt,
+                )
+                for opt in range(options)
+            ]
+            groups.append(
+                BubbleGroup(
+                    category="question",
+                    group_index=question_number,
+                    display_label=str(question_number),
+                    bubbles=bubbles,
+                    column_index=col,
+                )
+            )
             question_number += 1
 
-    return bubbles
+    return groups
 
 
 def calculate_roll_label_position(
     geom: PageGeometry,
     layout: BubbleLayout,
 ) -> tuple[float, float]:
-    """Calculate the position for 'Roll Number' label.
+    """Calculate the position for 'Roll Number' label."""
 
-    Returns:
-        (x, y) coordinates for the label
-    """
-    # Position label horizontally to match Questions label positioning
     label_x = geom.margin + layout.label_column_width + layout.column_padding / 2
 
-    # Label occupies the first row in the grid (row 0)
-    # Position at row center Y coordinate (matching Questions label positioning)
     top_y = geom.header_bottom - layout.diameter
     label_y = top_y - layout.vertical_gap
 
@@ -200,22 +208,12 @@ def calculate_questions_label_position(
     roll_bottom: float,
     markers: MarkerConfig,
 ) -> tuple[float, float]:
-    """Calculate the position for 'Questions' label above option headers.
+    """Calculate the position for 'Questions' label above option headers."""
 
-    Args:
-        roll_bottom: Bottom edge of roll number section (passed from generate_roll_bubble_coordinates)
-        markers: Marker configuration for anchor-aware positioning
-
-    Returns:
-        (x, y) coordinates for the label, or (0, 0) if no valid position
-    """
-    # Use centralized content zone calculation for consistency
     content_top_y, content_bottom_y = calculate_content_zone(geom, markers, layout)
 
-    # The label appears at top_y - vertical_gap, so adjust accordingly
     top_y = content_top_y + layout.vertical_gap
 
-    # Generate row centers for questions
     row_centers: List[float] = []
     row_index = 1
     while True:
@@ -225,20 +223,15 @@ def calculate_questions_label_position(
         row_centers.append(y)
         row_index += 1
 
-    # Find where first column starts (avoiding roll bubbles)
     first_column_start = next(
         (idx for idx, y in enumerate(row_centers) if y - layout.radius < roll_bottom),
         len(row_centers),
     )
 
-    # First question bubble in column 0 starts at first_column_start + 2
     first_question_row = first_column_start + 2
     if first_question_row >= len(row_centers):
-        return 0, 0  # No valid position
+        return 0, 0
 
-    # Position label well above the option headers for clear separation
-    # Headers are at topmost_y + 0.7 * vertical_gap
-    # Label should be significantly higher to avoid overlap
     topmost_bubble_y = row_centers[first_question_row]
     label_x = geom.margin + layout.label_column_width + layout.column_padding / 2
     label_y = topmost_bubble_y + layout.vertical_gap * 1.6
@@ -286,29 +279,16 @@ def calculate_anchor_centers(
 def calculate_content_zone(
     geom: PageGeometry, markers: MarkerConfig, layout: BubbleLayout
 ) -> Tuple[float, float]:
-    """Calculate the content zone boundaries based on anchor positions.
+    """Calculate the content zone boundaries based on anchor positions."""
 
-    This ensures symmetric spacing and that content stays within anchor bounds.
-    Top spacing accounts for column headers that extend above bubbles.
-
-    Returns:
-        (top_y, bottom_y) - Y-coordinates defining the content zone
-            top_y: Maximum Y where content can start
-            bottom_y: Minimum Y where content can end
-    """
-    # Calculate anchor boundaries
     vertical_inset = geom.margin / 2.0
 
-    # Top anchor bottom edge
     top_anchor_bottom = max(vertical_inset, geom.header_bottom - vertical_inset - markers.anchor_size)
 
-    # Bottom anchor top edge
     bottom_anchor_top = vertical_inset + markers.anchor_size
 
-    # Top spacing must account for column headers extending above bubbles
-    # Headers are positioned at bubble_y + 0.7 * vertical_gap
-    top_spacing = 8 + int(0.7 * layout.vertical_gap) + 2  # 8 base + header height + 2 buffer
-    bottom_spacing = 8  # Keep symmetric spacing for bottom
+    top_spacing = 8 + int(0.7 * layout.vertical_gap) + 2
+    bottom_spacing = 8
 
     content_top_y = top_anchor_bottom - top_spacing
     content_bottom_y = bottom_anchor_top + bottom_spacing
@@ -321,19 +301,14 @@ def generate_all_bubble_coordinates(
     layout: BubbleLayout,
     sheet: SheetLayout,
     markers: MarkerConfig,
-) -> tuple[List[BubbleCoordinate], List[BoxCoordinate], List[BubbleCoordinate], float]:
-    """Generate all bubble coordinates and box coordinates for an OMR sheet.
+) -> tuple[List[BubbleGroup], List[BoxCoordinate], float]:
+    """Generate all bubble groups and write-in boxes for an OMR sheet."""
 
-    Returns:
-        (roll_bubbles, roll_boxes, question_bubbles, roll_bottom)
-    """
-    roll_bubbles, roll_boxes, roll_top, _, roll_bottom = generate_roll_bubble_coordinates(
+    roll_groups, boxes, _, roll_bottom = generate_roll_bubble_groups(
         geom, layout, sheet, markers
     )
-
-    question_x_start = geom.margin
-    question_bubbles = generate_question_bubble_coordinates(
-        geom, layout, sheet, markers, roll_top, question_x_start, roll_bottom
+    question_groups = generate_question_bubble_groups(
+        geom, layout, sheet, markers, roll_bottom
     )
 
-    return roll_bubbles, roll_boxes, question_bubbles, roll_bottom
+    return roll_groups + question_groups, boxes, roll_bottom
