@@ -58,13 +58,13 @@ pip install -r requirements.txt
 
 ```bash
 # Generate blank OMR sheet PDF
-python omr_sheet_generator.py
+python omr_sheet_generator_new.py
 
 # Convert to image for testing
 python pdf_to_image.py
 ```
 
-Output: `sheets/omr_sheet.pdf` and `sheets/omr_sheet.png`
+Output: `sheets/omr_sheet_fpdf.pdf` and corresponding PNG image
 
 ### Process Scanned Sheets
 
