@@ -87,7 +87,13 @@ def draw_header_section(pdf: OMRPDF, geom: PageGeometry) -> None:
 
     header_bottom = geom.header_bottom
     header_height = geom.height - header_bottom
-    header_top = geom.height - geom.margin
+
+    # Consistent padding at top and bottom edges of header
+    header_padding = 12
+
+    # Account for title font height so padding is from top of text, not baseline
+    title_font_size = 18
+    header_top = geom.height - header_padding - title_font_size
 
     pdf.set_fill_color(247, 248, 250)
     _rect(pdf, geom, 0, header_bottom, geom.width, header_height, style=RenderStyle.F)
@@ -97,51 +103,62 @@ def draw_header_section(pdf: OMRPDF, geom: PageGeometry) -> None:
     _line(pdf, geom, geom.margin, header_bottom, geom.width - geom.margin, header_bottom)
     pdf.set_draw_color(0, 0, 0)
 
-    title_padding = 16
-    pdf.set_font("Helvetica", "B", 20)
+    # Title section - compact spacing
+    pdf.set_font("Helvetica", "B", title_font_size)
     title = "OMR Answer Sheet"
     title_width = pdf.get_string_width(title)
     title_x = (geom.width - title_width) / 2
-    _text(pdf, geom, title_x, header_top - title_padding, title)
+    _text(pdf, geom, title_x, header_top, title)
 
-    pdf.set_font("Helvetica", size=12)
+    pdf.set_font("Helvetica", size=11)
     exam_info = "Exam Date: _____________    Max Marks: _____________"
     exam_width = pdf.get_string_width(exam_info)
     exam_x = (geom.width - exam_width) / 2
-    _text(pdf, geom, exam_x, header_top - title_padding - 26, exam_info)
+    _text(pdf, geom, exam_x, header_top - 20, exam_info)
 
     inner_width = geom.inner_width
-    gutter = 28
+    gutter = 24
     left_width = inner_width * 0.45
     right_x = geom.margin + left_width + gutter
     left_x = geom.margin
     divider_x = geom.margin + left_width + gutter / 2
 
-    content_top = header_top - title_padding - 58
-    line_height = 18
+    content_top = header_top - 44
+    line_height = 14
 
-    pdf.set_font("Helvetica", "B", 12)
+    # Calculate bottom boundary to match top padding
+    content_font_size = 10
+    content_bottom = header_bottom + header_padding + content_font_size * 0.3
+
+    pdf.set_font("Helvetica", "B", 11)
     _text(pdf, geom, left_x, content_top, "Student Details")
     pdf.set_line_width(0.6)
     pdf.set_draw_color(200, 200, 200)
 
-    pdf.set_font("Helvetica", size=11)
-    detail_y = content_top - line_height
-    for label in ("Student Name", "Class / Section"):
-        _text(pdf, geom, left_x, detail_y, f"{label}:")
-        line_y = detail_y - 6
-        _line(pdf, geom, left_x, line_y, left_x + left_width, line_y)
-        detail_y -= line_height
+    pdf.set_font("Helvetica", size=content_font_size)
+    # Add empty row after header
+    detail_y = content_top - line_height * 2
+
+    # Student Name field
+    _text(pdf, geom, left_x, detail_y, "Student Name:")
+    line_y = detail_y - 5
+    _line(pdf, geom, left_x, line_y, left_x + left_width, line_y)
+    detail_y -= line_height * 2  # Extra spacing for writing room
+
+    # Class / Section field
+    _text(pdf, geom, left_x, detail_y, "Class / Section:")
+    line_y = detail_y - 5
+    _line(pdf, geom, left_x, line_y, left_x + left_width, line_y)
 
     pdf.set_line_width(0.8)
-    _line(pdf, geom, divider_x, header_bottom + 12, divider_x, content_top + 6)
+    _line(pdf, geom, divider_x, content_bottom, divider_x, content_top + 4)
 
     pdf.set_line_width(1)
     pdf.set_draw_color(0, 0, 0)
-    pdf.set_font("Helvetica", "B", 12)
+    pdf.set_font("Helvetica", "B", 11)
     _text(pdf, geom, right_x, content_top, "Instructions")
 
-    pdf.set_font("Helvetica", size=11)
+    pdf.set_font("Helvetica", size=10)
     instructions = (
         "Use blue or black pen to fill bubbles.",
         "Shade only one option for each question.",
