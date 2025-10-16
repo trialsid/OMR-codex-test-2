@@ -5,6 +5,8 @@ __pycache__/
 *.so
 .Python
 
+omr_realtime_scanner.py
+
 # Generated OMR sheets (except omr_sheet.png)
 sheets/*
 !sheets/omr_sheet.png

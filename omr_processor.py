@@ -76,10 +76,11 @@ def detect_anchor_markers(
     min_area = expected_area * 0.5
     max_area = expected_area * 2.0
 
-    # Define corner bands (anchors should be in outer 25% of image)
+    # Define corner bands (anchors should be in outer portions of image)
     # Allows for realistic mobile captures with some margin around the sheet
     corner_band_x = img_width * 0.25
-    corner_band_y = img_height * 0.35
+    corner_band_y_top = img_height * 0.35    # 35% from top (accounts for 20% header)
+    corner_band_y_bottom = img_height * 0.20  # 20% from bottom (anchors near edge)
 
     # Find contours
     contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -105,8 +106,8 @@ def detect_anchor_markers(
 
         in_left_band = center_x < corner_band_x
         in_right_band = center_x > (img_width - corner_band_x)
-        in_top_band = center_y < corner_band_y
-        in_bottom_band = center_y > (img_height - corner_band_y)
+        in_top_band = center_y < corner_band_y_top
+        in_bottom_band = center_y > (img_height - corner_band_y_bottom)
 
         # Must be in a corner (left/right AND top/bottom)
         in_corner = (in_left_band or in_right_band) and (in_top_band or in_bottom_band)
