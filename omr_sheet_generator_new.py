@@ -16,6 +16,7 @@ from fpdf.enums import RenderStyle
 from omr_config import PageGeometry, BubbleLayout, MarkerConfig, SheetLayout
 from omr_layout import (
     BubbleCoordinate,
+    BoxCoordinate,
     calculate_anchor_positions,
     calculate_questions_label_position,
     calculate_roll_label_position,
@@ -202,7 +203,7 @@ def draw_grid_markers(
                 pdf,
                 geom,
                 x,
-                y,
+                y - markers.grid_marker_size / 2,  # Center marker on bubble row
                 markers.grid_marker_size,
                 markers.grid_marker_size,
                 style=RenderStyle.F,
@@ -215,47 +216,36 @@ def draw_roll_number_section(
     layout: BubbleLayout,
     sheet: SheetLayout,
     bubbles: List[BubbleCoordinate],
+    boxes: List[BoxCoordinate],
 ) -> None:
     if not bubbles:
         return
 
-    # Find topmost bubble Y coordinate (same approach as question columns)
+    # Find topmost bubble Y coordinate to calculate label position
     topmost_bubble_y = max(bubble.y for bubble in bubbles)
 
-    # Calculate roll column span for centering
-    left_padding = layout.column_padding / 2
-    x_start = geom.margin + layout.label_column_width + left_padding + layout.radius
-    roll_span_width = (sheet.roll_columns - 1) * (layout.diameter + layout.option_gap)
-    roll_center_x = x_start + roll_span_width / 2
+    # The roll number grid reserves four rows above the first bubble:
+    #   row 0 -> label, row 1 -> spacer, row 2 -> boxes, row 3 -> spacer
+    grid_top_y = topmost_bubble_y + layout.vertical_gap * 4
 
-    # Position label at header level (row 0 in the grid structure)
-    # Bubbles are at row 4+, so label should be 4 rows above topmost bubble + header offset
-    label_y = topmost_bubble_y + layout.vertical_gap * 4.7
+    # Roll label shares the same horizontal alignment as question headers
+    label_x, _ = calculate_roll_label_position(geom, layout)
+    label_y = grid_top_y - layout.vertical_gap
 
-    # Center the "Roll Number" text
     pdf.set_font("Helvetica", size=12)
-    label_text = "Roll Number"
-    label_width = pdf.get_string_width(label_text)
-    label_x = roll_center_x - label_width / 2
-    _text(pdf, geom, label_x, label_y, label_text)
+    _text(pdf, geom, label_x, label_y, "Roll Number")
 
-    # Position boxes between label and bubbles
-    # With bubbles shifted down by 4 rows, we have space at +2 rows above first bubble for boxes
-    box_width = layout.diameter * 1.3
-    box_height = layout.diameter * 1.2
-    box_y_center = topmost_bubble_y + layout.vertical_gap * 2
-
+    # Draw write-in boxes using pre-generated coordinates
     pdf.set_line_width(0.8)
     pdf.set_draw_color(128, 128, 128)
-    for col in range(sheet.roll_columns):
-        box_x_center = x_start + col * (layout.diameter + layout.option_gap)
+    for box in boxes:
         _rect(
             pdf,
             geom,
-            box_x_center - box_width / 2,
-            box_y_center - box_height / 2,
-            box_width,
-            box_height,
+            box.x - box.width / 2,
+            box.y - box.height / 2,
+            box.width,
+            box.height,
         )
 
     pdf.set_line_width(1)
@@ -413,14 +403,14 @@ def generate_omr_sheet(output_path: Path) -> None:
     ensure_output_directory(output_path.parent)
     pdf = OMRPDF(geom)
 
-    roll_bubbles, question_bubbles, roll_bottom = generate_all_bubble_coordinates(
+    roll_bubbles, roll_boxes, question_bubbles, roll_bottom = generate_all_bubble_coordinates(
         geom, layout, sheet, markers
     )
 
     draw_header_section(pdf, geom)
     draw_anchor_markers(pdf, geom, markers)
     draw_grid_markers(pdf, geom, markers, roll_bubbles, question_bubbles)
-    draw_roll_number_section(pdf, geom, layout, sheet, roll_bubbles)
+    draw_roll_number_section(pdf, geom, layout, sheet, roll_bubbles, roll_boxes)
     draw_question_columns(pdf, geom, layout, sheet, markers, question_bubbles, roll_bottom)
 
     pdf.output(str(output_path))

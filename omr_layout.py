@@ -29,16 +29,26 @@ class BubbleCoordinate:
     question_column: int | None = None
 
 
+@dataclass
+class BoxCoordinate:
+    """Represents a write-in box position in the roll number grid."""
+    x: float  # Center x-coordinate in PDF points
+    y: float  # Center y-coordinate in PDF points
+    width: float  # Box width in PDF points
+    height: float  # Box height in PDF points
+    column: int  # Column index in the roll number grid
+
+
 def generate_roll_bubble_coordinates(
     geom: PageGeometry,
     layout: BubbleLayout,
     sheet: SheetLayout,
     markers: MarkerConfig,
-) -> tuple[List[BubbleCoordinate], float, float, float]:
-    """Generate coordinates for roll number bubbles.
+) -> tuple[List[BubbleCoordinate], List[BoxCoordinate], float, float, float]:
+    """Generate coordinates for roll number bubbles and write-in boxes.
 
     Returns:
-        (bubbles, top_y, area_width, bottom_y)
+        (bubbles, boxes, top_y, area_width, bottom_y)
     """
     bubble_span = sheet.roll_columns * layout.diameter
     bubble_span += (sheet.roll_columns - 1) * layout.option_gap
@@ -52,6 +62,24 @@ def generate_roll_bubble_coordinates(
     # The label appears at top_y - vertical_gap, so adjust top_y accordingly
     top_y = content_top_y + layout.vertical_gap
 
+    # Generate write-in boxes at row 2 of the grid
+    # Grid structure: row 0 = label, row 1 = spacer, row 2 = boxes, row 3 = spacer, row 4+ = bubbles
+    box_width = layout.diameter * 1.3
+    box_height = layout.diameter * 1.2
+    box_y = top_y - 2 * layout.vertical_gap
+
+    boxes = []
+    for col in range(sheet.roll_columns):
+        x = x_start + col * (layout.diameter + layout.option_gap)
+        boxes.append(BoxCoordinate(
+            x=x,
+            y=box_y,
+            width=box_width,
+            height=box_height,
+            column=col,
+        ))
+
+    # Generate bubbles at row 4+ of the grid
     bubbles = []
     for row in range(sheet.roll_rows):
         # Shift bubbles down by 4 rows to make space for label (1 row) and write-in boxes (1 row)
@@ -70,7 +98,7 @@ def generate_roll_bubble_coordinates(
 
     # Adjust bottom_y to account for the extra rows used by label and write-in boxes
     bottom_y = top_y - (sheet.roll_rows + 3) * layout.vertical_gap - layout.radius
-    return bubbles, top_y, area_width, bottom_y
+    return bubbles, boxes, top_y, area_width, bottom_y
 
 
 def generate_question_bubble_coordinates(
@@ -293,13 +321,13 @@ def generate_all_bubble_coordinates(
     layout: BubbleLayout,
     sheet: SheetLayout,
     markers: MarkerConfig,
-) -> tuple[List[BubbleCoordinate], List[BubbleCoordinate], float]:
-    """Generate all bubble coordinates for an OMR sheet.
+) -> tuple[List[BubbleCoordinate], List[BoxCoordinate], List[BubbleCoordinate], float]:
+    """Generate all bubble coordinates and box coordinates for an OMR sheet.
 
     Returns:
-        (roll_bubbles, question_bubbles, roll_bottom)
+        (roll_bubbles, roll_boxes, question_bubbles, roll_bottom)
     """
-    roll_bubbles, roll_top, _, roll_bottom = generate_roll_bubble_coordinates(
+    roll_bubbles, roll_boxes, roll_top, _, roll_bottom = generate_roll_bubble_coordinates(
         geom, layout, sheet, markers
     )
 
@@ -308,4 +336,4 @@ def generate_all_bubble_coordinates(
         geom, layout, sheet, markers, roll_top, question_x_start, roll_bottom
     )
 
-    return roll_bubbles, question_bubbles, roll_bottom
+    return roll_bubbles, roll_boxes, question_bubbles, roll_bottom
