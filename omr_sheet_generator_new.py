@@ -18,9 +18,9 @@ from omr_layout import (
     BubbleGroup,
     BoxCoordinate,
     calculate_anchor_positions,
-    calculate_questions_label_position,
-    calculate_roll_label_position,
     generate_all_bubble_coordinates,
+    build_section_specifications,
+    allocate_column_rows,
 )
 
 
@@ -250,73 +250,136 @@ def draw_grid_markers(
             )
 
 
-def draw_roll_number_section(
+def draw_unified_bubble_section(
     pdf: OMRPDF,
     geom: PageGeometry,
     layout: BubbleLayout,
+    sheet: SheetLayout,
+    markers: MarkerConfig,
     groups: List[BubbleGroup],
     boxes: List[BoxCoordinate],
 ) -> None:
+    """Draw all bubble groups with proper section labels, headers, and spacers."""
     if not groups:
         return
 
-    # Find topmost bubble Y coordinate to calculate label position
-    topmost_bubble_y = max(bubble.y for group in groups for bubble in group.bubbles)
+    # Get section specifications and calculate row allocations for drawing labels/headers
+    section_specs = build_section_specifications(sheet)
 
-    # The roll number grid reserves four rows above the first bubble:
-    #   row 0 -> label, row 1 -> spacer, row 2 -> boxes, row 3 -> spacer
-    grid_top_y = topmost_bubble_y + layout.vertical_gap * 4
+    # Calculate content zone for row positions
+    from omr_layout import calculate_content_zone
+    content_top_y, content_bottom_y = calculate_content_zone(geom, markers, layout)
+    top_y = content_top_y + layout.vertical_gap
 
-    # Roll label shares the same horizontal alignment as question headers
-    label_x, _ = calculate_roll_label_position(geom, layout)
-    label_y = grid_top_y - layout.vertical_gap
+    # Calculate row centers
+    row_centers: List[float] = []
+    row_index = 0
+    while True:
+        y = top_y - row_index * layout.vertical_gap
+        if y - layout.radius <= content_bottom_y:
+            break
+        row_centers.append(y)
+        row_index += 1
 
-    pdf.set_font("Noto", size=12)
-    _text(pdf, geom, label_x, label_y, "Roll Number")
+    # Calculate column width
+    max_options = max(1, sheet.roll_columns, 1, sheet.question_options)
+    column_width = layout.group_width(max_options)
 
-    # Draw write-in boxes using pre-generated coordinates
-    pdf.set_line_width(0.8)
-    pdf.set_draw_color(128, 128, 128)
-    for box in boxes:
-        _rect(
-            pdf,
-            geom,
-            box.x - box.width / 2,
-            box.y - box.height / 2,
-            box.width,
-            box.height,
-        )
+    # Group bubbles by column
+    columns: dict[int, List[BubbleGroup]] = {}
+    for group in groups:
+        col_idx = group.column_index or 0
+        columns.setdefault(col_idx, []).append(group)
 
+    # Process each column
+    for col_idx in sorted(columns.keys()):
+        is_first_column = (col_idx == 0)
+        column_origin = geom.margin + col_idx * column_width
+
+        # Get row allocations for this column
+        row_allocations, _ = allocate_column_rows(section_specs, row_centers, is_first_column)
+
+        # Draw labels, headers, and boxes based on row allocations
+        for allocation in row_allocations:
+            x_base = column_origin + layout.label_column_width + layout.column_padding / 2
+
+            if allocation.row_type == "label":
+                # Draw section label
+                section_labels = {"class": "Class", "roll": "Roll Number", "set": "Set", "question": "Questions"}
+                label_text = section_labels.get(allocation.section_category, "")
+                pdf.set_font("Noto", "B", size=11)
+                _text(pdf, geom, x_base, allocation.y_position, label_text)
+
+            elif allocation.row_type == "headers":
+                # Draw option headers (A B C D)
+                pdf.set_font("Noto", size=10)
+                ascii_offsets = [chr(ord("A") + opt) for opt in range(sheet.question_options)]
+                x_bubble_base = x_base + layout.radius
+                for opt in range(sheet.question_options):
+                    x = x_bubble_base + opt * (layout.diameter + layout.option_gap)
+                    _text(pdf, geom, x - 3.25, allocation.y_position, ascii_offsets[opt])
+
+    # Draw write-in boxes for roll number
+    if boxes:
+        pdf.set_line_width(0.8)
+        pdf.set_draw_color(128, 128, 128)
+        for box in boxes:
+            _rect(
+                pdf,
+                geom,
+                box.x - box.width / 2,
+                box.y - box.height / 2,
+                box.width,
+                box.height,
+            )
+        pdf.set_line_width(1)
+        pdf.set_draw_color(0, 0, 0)
+
+    # Calculate y-ranges for each column to draw vertical lines
+    column_y_ranges: dict[int, tuple[float, float]] = {}
+    for group in groups:
+        col = group.column_index or 0
+        for bubble in group.bubbles:
+            min_y = bubble.y - bubble.radius
+            max_y = bubble.y + bubble.radius
+            if col in column_y_ranges:
+                column_y_ranges[col] = (
+                    min(column_y_ranges[col][0], min_y),
+                    max(column_y_ranges[col][1], max_y),
+                )
+            else:
+                column_y_ranges[col] = (min_y, max_y)
+
+    # Draw vertical lines on either side of label columns
+    pdf.set_draw_color(192, 192, 192)
     pdf.set_line_width(1)
+    for col, (min_y, max_y) in column_y_ranges.items():
+        column_origin = geom.margin + col * column_width
+        left_line_x = column_origin
+        right_line_x = column_origin + layout.label_column_width
+        _line(pdf, geom, left_line_x, min_y, left_line_x, max_y)
+        _line(pdf, geom, right_line_x, min_y, right_line_x, max_y)
     pdf.set_draw_color(0, 0, 0)
-    pdf.set_font("Noto", size=12)
 
+    # Draw row labels and bubbles
+    pdf.set_font("Noto", size=12)
     digit_width = 6.5
     gap_before_bubble = 5
-
-    # Find the topmost and bottommost bubble y-coordinates
-    min_y = min(bubble.y - bubble.radius for group in groups for bubble in group.bubbles)
-    max_y = max(bubble.y + bubble.radius for group in groups for bubble in group.bubbles)
-
-    # Draw vertical lines on either side of the label column
-    left_line_x = geom.margin
-    right_line_x = geom.margin + layout.label_column_width
-    pdf.set_draw_color(192, 192, 192)  # Light grey
-    pdf.set_line_width(1)
-    _line(pdf, geom, left_line_x, min_y, left_line_x, max_y)
-    _line(pdf, geom, right_line_x, min_y, right_line_x, max_y)
-    pdf.set_draw_color(0, 0, 0)  # Reset to black
-
-    label_end_x = geom.margin + layout.label_column_width - gap_before_bubble
 
     for group in groups:
         if not group.bubbles:
             continue
 
-        digit_x = label_end_x - digit_width
-        digit_y = group.bubbles[0].y - layout.radius / 2
-        _text(pdf, geom, digit_x, digit_y, group.display_label)
+        column_origin = geom.margin + (group.column_index or 0) * column_width
+        label_end_x = column_origin + layout.label_column_width - gap_before_bubble
 
+        # Draw row label
+        current_text_width = len(group.display_label) * digit_width
+        label_x = label_end_x - current_text_width
+        label_y = group.bubbles[0].y - layout.radius / 2
+        _text(pdf, geom, label_x, label_y, group.display_label)
+
+        # Draw bubbles
         for bubble in group.bubbles:
             _ellipse(
                 pdf,
@@ -445,14 +508,11 @@ def generate_omr_sheet(output_path: Path) -> None:
     pdf = OMRPDF(geom)
 
     bubble_groups, roll_boxes, roll_bottom = generate_all_bubble_coordinates(geom, layout, sheet, markers)
-    roll_groups = [group for group in bubble_groups if group.category == "roll"]
-    question_groups = [group for group in bubble_groups if group.category == "question"]
 
     draw_header_section(pdf, geom)
     draw_anchor_markers(pdf, geom, markers)
     draw_grid_markers(pdf, geom, markers, bubble_groups)
-    draw_roll_number_section(pdf, geom, layout, roll_groups, roll_boxes)
-    draw_question_columns(pdf, geom, layout, sheet, markers, question_groups, roll_bottom)
+    draw_unified_bubble_section(pdf, geom, layout, sheet, markers, bubble_groups, roll_boxes)
 
     pdf.output(str(output_path))
 

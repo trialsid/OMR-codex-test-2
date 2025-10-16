@@ -68,17 +68,25 @@ class MarkerConfig:
 @dataclass(frozen=True)
 class SheetLayout:
     """Complete OMR sheet layout configuration."""
-    # Roll number section
+    # Class section (first in column)
+    class_options: int = 6  # Classes 5-10
+
+    # Roll number section (second in column)
     roll_columns: int = 3
     roll_rows: int = 10
 
-    # Question section
+    # Set section (third in column)
+    set_options: int = 4  # Sets A-D
+
+    # Question section (fills remaining rows)
     question_options: int = 4
 
     def __post_init__(self):
         """Validate configuration."""
+        assert self.class_options > 0, "Class options must be positive"
         assert self.roll_columns > 0, "Roll columns must be positive"
         assert self.roll_rows > 0, "Roll rows must be positive"
+        assert self.set_options > 0, "Set options must be positive"
         assert self.question_options > 0, "Question options must be positive"
 
 
