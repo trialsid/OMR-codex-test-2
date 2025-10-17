@@ -321,9 +321,14 @@ def draw_unified_bubble_section(
             elif allocation.row_type == "headers":
                 # Draw option headers (A B C D)
                 pdf.set_font("Noto", size=10)
-                ascii_offsets = [chr(ord("A") + opt) for opt in range(sheet.question_options)]
+                # Determine number of options based on section category
+                if allocation.section_category == "set":
+                    num_options = sheet.set_options
+                else:  # questions
+                    num_options = sheet.question_options
+                ascii_offsets = [chr(ord("A") + opt) for opt in range(num_options)]
                 x_bubble_base = x_base + layout.radius
-                for opt in range(sheet.question_options):
+                for opt in range(num_options):
                     x = x_bubble_base + opt * (layout.diameter + layout.option_gap)
                     _text(pdf, geom, x - 3.25, allocation.y_position, ascii_offsets[opt])
 

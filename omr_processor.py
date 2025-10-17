@@ -589,14 +589,30 @@ def overlay_labels(image: np.ndarray, group_samples: List[BubbleGroupSample]) ->
             cv2.putText(output, label_text, (text_x, text_y), font, font_scale, (0, 0, 255), thickness)
 
         elif sample.group.category == "set":
-            # Set: Draw "Set" label above and set letter (A/B/C/D) next to bubble
+            # Set: Draw "Set" label above first bubble and option letters inside bubbles
             first_detection = sample.detections[0]
-            label_text = f"Set {sample.group.display_label}"
+            label_text = "Set"
             font_scale = 0.35
             text_size = cv2.getTextSize(label_text, font, font_scale, thickness)[0]
             text_x = first_detection.bubble.x - text_size[0] // 2
             text_y = first_detection.bubble.y - first_detection.bubble.radius - 5
             cv2.putText(output, label_text, (text_x, text_y), font, font_scale, (0, 0, 255), thickness)
+
+            # Draw option label (A/B/C/D) inside each bubble
+            for detection in sample.detections:
+                option_text = detection.layout.label
+                option_size = cv2.getTextSize(option_text, font, 0.4, thickness)[0]
+                text_x = detection.bubble.x - option_size[0] // 2
+                text_y = detection.bubble.y + option_size[1] // 2
+                cv2.putText(
+                    output,
+                    option_text,
+                    (text_x, text_y),
+                    font,
+                    0.4,
+                    (0, 128, 0),
+                    thickness,
+                )
 
         elif sample.group.category == "question":
             # Question: Draw question label above and option labels inside bubbles

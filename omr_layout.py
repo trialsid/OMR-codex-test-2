@@ -163,10 +163,11 @@ def build_section_specifications(sheet: SheetLayout) -> List[SectionSpec]:
         SectionSpec(
             category="set",
             label="Set",
-            bubble_rows=sheet.set_options,
+            bubble_rows=1,  # Single row with all options horizontal
             has_label_row=True,
             has_spacer_after=True,
-            has_special_row=False,
+            has_special_row=True,  # Option headers (A B C D) above bubbles
+            special_row_position="before",
         ),
         SectionSpec(
             category="question",
@@ -430,12 +431,14 @@ def create_bubble_group_from_allocation(
 
     elif allocation.section_category == "set":
         set_labels = ["A", "B", "C", "D"]
-        display_label = set_labels[allocation.bubble_group_index]
-        group_index = allocation.bubble_group_index
-        # Single bubble
-        bubbles.append(
-            BubbleCoordinate(x=x_base, y=y, radius=layout.radius, label="•", index=0)
-        )
+        display_label = ""  # No individual display label for horizontal layout
+        group_index = 0  # Single group for all set options
+        # Multiple bubbles horizontal (A, B, C, D)
+        for opt_idx, label in enumerate(set_labels):
+            x = x_base + opt_idx * (layout.diameter + layout.option_gap)
+            bubbles.append(
+                BubbleCoordinate(x=x, y=y, radius=layout.radius, label=label, index=opt_idx)
+            )
 
     elif allocation.section_category == "question":
         display_label = str(question_counter)
