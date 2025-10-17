@@ -565,23 +565,44 @@ def overlay_labels(image: np.ndarray, group_samples: List[BubbleGroupSample]) ->
         if not sample.detections:
             continue
 
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        thickness = 1
+
         if sample.group.category == "roll":
+            # Roll number: Draw digit label inside each bubble
             for detection in sample.detections:
                 text = detection.layout.label
-                font = cv2.FONT_HERSHEY_SIMPLEX
                 font_scale = 0.4
-                thickness = 1
                 text_size = cv2.getTextSize(text, font, font_scale, thickness)[0]
                 text_x = detection.bubble.x - text_size[0] // 2
                 text_y = detection.bubble.y + text_size[1] // 2
                 cv2.putText(output, text, (text_x, text_y), font, font_scale, (255, 0, 0), thickness)
-        else:
-            # Draw question label above the first bubble in the group
+
+        elif sample.group.category == "class":
+            # Class: Draw "Class" label above and class number (e.g., "5") next to bubble
+            first_detection = sample.detections[0]
+            label_text = f"Class {sample.group.display_label}"
+            font_scale = 0.35
+            text_size = cv2.getTextSize(label_text, font, font_scale, thickness)[0]
+            text_x = first_detection.bubble.x - text_size[0] // 2
+            text_y = first_detection.bubble.y - first_detection.bubble.radius - 5
+            cv2.putText(output, label_text, (text_x, text_y), font, font_scale, (0, 0, 255), thickness)
+
+        elif sample.group.category == "set":
+            # Set: Draw "Set" label above and set letter (A/B/C/D) next to bubble
+            first_detection = sample.detections[0]
+            label_text = f"Set {sample.group.display_label}"
+            font_scale = 0.35
+            text_size = cv2.getTextSize(label_text, font, font_scale, thickness)[0]
+            text_x = first_detection.bubble.x - text_size[0] // 2
+            text_y = first_detection.bubble.y - first_detection.bubble.radius - 5
+            cv2.putText(output, label_text, (text_x, text_y), font, font_scale, (0, 0, 255), thickness)
+
+        elif sample.group.category == "question":
+            # Question: Draw question label above and option labels inside bubbles
             first_detection = sample.detections[0]
             q_text = f"Q{sample.group.display_label}"
-            font = cv2.FONT_HERSHEY_SIMPLEX
             font_scale = 0.35
-            thickness = 1
             text_size = cv2.getTextSize(q_text, font, font_scale, thickness)[0]
             text_x = first_detection.bubble.x - text_size[0] // 2
             text_y = first_detection.bubble.y - first_detection.bubble.radius - 5
@@ -660,20 +681,31 @@ def process_omr_sheet(
         sheet,
         markers_cfg,
     )
-    total_roll_bubbles = sum(
-        len(sample.detections)
-        for sample in group_samples
-        if sample.group.category == "roll"
-    )
-    total_questions = sum(
-        1 for sample in group_samples if sample.group.category == "question"
-    )
-    print(
-        f"Sampled {total_roll_bubbles} roll bubbles "
-        f"and {total_questions} questions"
-    )
+    # Count bubbles by category
+    category_counts = {}
+    for sample in group_samples:
+        category = sample.group.category
+        if category not in category_counts:
+            category_counts[category] = {"groups": 0, "bubbles": 0}
+        category_counts[category]["groups"] += 1
+        category_counts[category]["bubbles"] += len(sample.detections)
 
-    if total_roll_bubbles == 0 and total_questions == 0:
+    # Build summary message
+    summary_parts = []
+    for category in ["class", "roll", "set", "question"]:
+        if category in category_counts:
+            counts = category_counts[category]
+            if category == "roll":
+                summary_parts.append(f"{counts['bubbles']} roll bubbles")
+            else:
+                summary_parts.append(f"{counts['groups']} {category} groups")
+
+    if summary_parts:
+        print(f"Sampled {', '.join(summary_parts)}")
+
+    # Validate that we detected some bubbles
+    total_groups = sum(counts["groups"] for counts in category_counts.values())
+    if total_groups == 0:
         print("No bubble samples evaluated")
         return False
 

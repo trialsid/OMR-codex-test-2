@@ -253,13 +253,13 @@ def validate_bubbles(image_path: Path, output_path: Path) -> None:
 
         # Identify the bubble
         if max_group.category == "roll":
-            bubble_id = (
-                f"Roll digit {max_group.display_label}, column {max_bubble.index}"
-            )
-        else:
-            bubble_id = (
-                f"Question {max_group.display_label}, option {max_bubble.label}"
-            )
+            bubble_id = f"Roll digit {max_group.display_label}, column {max_bubble.index}"
+        elif max_group.category == "class":
+            bubble_id = f"Class {max_group.display_label}"
+        elif max_group.category == "set":
+            bubble_id = f"Set {max_group.display_label}"
+        else:  # question
+            bubble_id = f"Question {max_group.display_label}, option {max_bubble.label}"
 
         print(f"  Max drift bubble: {bubble_id}")
 

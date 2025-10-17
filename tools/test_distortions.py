@@ -409,14 +409,19 @@ def process_distorted_image(
             corrected, geom, layout, sheet, markers_cfg
         )
 
-        roll_bubbles = sum(
-            len(sample.detections)
-            for sample in group_samples
-            if sample.group.category == "roll"
-        )
-        questions = sum(
-            1 for sample in group_samples if sample.group.category == "question"
-        )
+        # Count all bubble groups
+        category_counts = {}
+        for sample in group_samples:
+            category = sample.group.category
+            if category not in category_counts:
+                category_counts[category] = 0
+            if category == "roll":
+                category_counts[category] += len(sample.detections)  # Count individual bubbles for roll
+            else:
+                category_counts[category] += 1  # Count groups for others
+
+        roll_bubbles = category_counts.get("roll", 0)
+        questions = category_counts.get("question", 0)
 
         # Overlay labels
         labeled = overlay_labels(corrected, group_samples)
