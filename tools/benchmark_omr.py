@@ -102,7 +102,7 @@ def process_with_timing(
 
     # Correct skew
     t0 = time.perf_counter()
-    corrected = correct_skew(image, anchor_points, geom)
+    corrected = correct_skew(image, anchor_points, geom, markers_cfg)
     timing.correct_skew = time.perf_counter() - t0
 
     # Sample bubbles

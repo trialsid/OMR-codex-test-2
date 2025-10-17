@@ -55,18 +55,27 @@ def profile_analyze_bubble_fill():
         print("Error: Could not detect anchor markers")
         return
 
-    corrected = correct_skew(image, anchor_points, geom)
+    corrected = correct_skew(image, anchor_points, geom, markers_cfg)
     gray = cv2.cvtColor(corrected, cv2.COLOR_BGR2GRAY)
 
     h, w = gray.shape
     print(f"Image size: {w}×{h} = {w*h:,} pixels")
 
     # Generate real bubble coordinates
-    roll_coords, question_coords, _ = generate_all_bubble_coordinates(geom, layout, sheet, markers_cfg)
-    all_coords = roll_coords + question_coords
+    bubble_groups, _, _ = generate_all_bubble_coordinates(geom, layout, sheet, markers_cfg)
+
+    # Extract individual bubbles from groups
+    all_coords = []
+    for group in bubble_groups:
+        all_coords.extend(group.bubbles)
+
     total_bubbles = len(all_coords)
 
-    print(f"\nProfiling {total_bubbles} bubbles ({len(roll_coords)} roll + {len(question_coords)} question)")
+    # Count by category
+    roll_bubbles = sum(len(g.bubbles) for g in bubble_groups if g.category == "roll")
+    question_bubbles = sum(len(g.bubbles) for g in bubble_groups if g.category == "question")
+
+    print(f"\nProfiling {total_bubbles} bubbles ({roll_bubbles} roll + {question_bubbles} question)")
 
     # Transform coordinates to pixel space (same logic as in omr_processor.py)
     anchor_inset_x = geom.margin / 2.0 + markers_cfg.anchor_size / 2.0
