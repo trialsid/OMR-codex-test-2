@@ -69,7 +69,7 @@ class MarkerConfig:
 class SheetLayout:
     """Complete OMR sheet layout configuration."""
     # Class section (first in column)
-    class_options: int = 6  # Classes 5-10
+    class_options: int = 5  # Classes 6-10
 
     # Roll number section (second in column)
     roll_columns: int = 3

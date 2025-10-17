@@ -146,10 +146,11 @@ def build_section_specifications(sheet: SheetLayout) -> List[SectionSpec]:
         SectionSpec(
             category="class",
             label="Class",
-            bubble_rows=sheet.class_options,
+            bubble_rows=1,  # Single row with all options horizontal
             has_label_row=True,
             has_spacer_after=True,
-            has_special_row=False,
+            has_special_row=True,  # Number headers (6 7 8 9 10) above bubbles
+            special_row_position="before",
         ),
         SectionSpec(
             category="roll",
@@ -334,25 +335,41 @@ def generate_all_bubble_coordinates(
     if not row_centers:
         return [], [], 0
 
-    # Calculate column width based on the widest section
-    max_options = max(
-        1,  # class (single option per row)
-        sheet.roll_columns,
-        1,  # set (single option per row)
-        sheet.question_options
-    )
-    column_width = layout.group_width(max_options)
+    # Calculate column widths responsively
+    # First column needs to fit: Class(5), Roll(3), Set(4) → max = 5
+    first_column_options = max(sheet.class_options, sheet.roll_columns, sheet.set_options)
+    first_column_width = layout.group_width(first_column_options)
+
+    # Subsequent columns only have Questions(4)
+    other_column_width = layout.group_width(sheet.question_options)
+
     available_width = geom.width - 2 * geom.margin
-    num_columns = max(1, int(available_width // column_width))
 
     all_groups: List[BubbleGroup] = []
     all_boxes: List[BoxCoordinate] = []
     question_counter = 1
 
+    # Track column positions dynamically
+    column_positions: List[float] = []
+    current_x = geom.margin
+
+    # Add first column if it fits
+    if first_column_width <= available_width:
+        column_positions.append(current_x)
+        current_x += first_column_width
+    else:
+        # If even first column doesn't fit, we can't create any layout
+        print(f"Warning: First column width ({first_column_width:.1f}pt) exceeds available width ({available_width:.1f}pt)")
+        return [], [], 0
+
+    # Add subsequent columns while they fit
+    while current_x + other_column_width <= geom.margin + available_width:
+        column_positions.append(current_x)
+        current_x += other_column_width
+
     # Process each column
-    for col_idx in range(num_columns):
+    for col_idx, column_origin in enumerate(column_positions):
         is_first_column = (col_idx == 0)
-        column_origin = geom.margin + col_idx * column_width
 
         # Allocate rows for this column
         row_allocations, question_rows_in_col = allocate_column_rows(
@@ -410,13 +427,15 @@ def create_bubble_group_from_allocation(
 
     # Determine group index and label
     if allocation.section_category == "class":
-        class_num = 5 + allocation.bubble_group_index  # 5, 6, 7, 8, 9, 10
-        display_label = str(class_num)
-        group_index = allocation.bubble_group_index
-        # Single bubble
-        bubbles.append(
-            BubbleCoordinate(x=x_base, y=y, radius=layout.radius, label="•", index=0)
-        )
+        class_numbers = [6, 7, 8, 9, 10]  # Classes 6-10
+        display_label = ""  # No individual display label for horizontal layout
+        group_index = 0  # Single group for all class options
+        # Multiple bubbles horizontal (6, 7, 8, 9, 10)
+        for opt_idx, class_num in enumerate(class_numbers):
+            x = x_base + opt_idx * (layout.diameter + layout.option_gap)
+            bubbles.append(
+                BubbleCoordinate(x=x, y=y, radius=layout.radius, label=str(class_num), index=opt_idx)
+            )
 
     elif allocation.section_category == "roll":
         digit = str(allocation.bubble_group_index % 10)

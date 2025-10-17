@@ -579,14 +579,30 @@ def overlay_labels(image: np.ndarray, group_samples: List[BubbleGroupSample]) ->
                 cv2.putText(output, text, (text_x, text_y), font, font_scale, (255, 0, 0), thickness)
 
         elif sample.group.category == "class":
-            # Class: Draw "Class" label above and class number (e.g., "5") next to bubble
+            # Class: Draw "Class" label above first bubble and class numbers inside bubbles
             first_detection = sample.detections[0]
-            label_text = f"Class {sample.group.display_label}"
+            label_text = "Class"
             font_scale = 0.35
             text_size = cv2.getTextSize(label_text, font, font_scale, thickness)[0]
             text_x = first_detection.bubble.x - text_size[0] // 2
             text_y = first_detection.bubble.y - first_detection.bubble.radius - 5
             cv2.putText(output, label_text, (text_x, text_y), font, font_scale, (0, 0, 255), thickness)
+
+            # Draw class number inside each bubble
+            for detection in sample.detections:
+                class_text = detection.layout.label
+                class_size = cv2.getTextSize(class_text, font, 0.4, thickness)[0]
+                text_x = detection.bubble.x - class_size[0] // 2
+                text_y = detection.bubble.y + class_size[1] // 2
+                cv2.putText(
+                    output,
+                    class_text,
+                    (text_x, text_y),
+                    font,
+                    0.4,
+                    (0, 128, 0),
+                    thickness,
+                )
 
         elif sample.group.category == "set":
             # Set: Draw "Set" label above first bubble and option letters inside bubbles

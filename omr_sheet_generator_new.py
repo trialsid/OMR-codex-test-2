@@ -289,20 +289,31 @@ def draw_unified_bubble_section(
         row_centers.append(y)
         row_index += 1
 
-    # Calculate column width
-    max_options = max(1, sheet.roll_columns, 1, sheet.question_options)
-    column_width = layout.group_width(max_options)
+    # Calculate column widths (same logic as omr_layout.py)
+    first_column_options = max(sheet.class_options, sheet.roll_columns, sheet.set_options)
+    first_column_width = layout.group_width(first_column_options)
+    other_column_width = layout.group_width(sheet.question_options)
 
-    # Group bubbles by column
+    # Group bubbles by column and extract column origins
     columns: dict[int, List[BubbleGroup]] = {}
+    column_origins: dict[int, float] = {}
+
     for group in groups:
         col_idx = group.column_index or 0
         columns.setdefault(col_idx, []).append(group)
 
+        # Extract column origin from the first bubble in the group
+        if col_idx not in column_origins and group.bubbles:
+            # Calculate back from bubble x to column origin
+            first_bubble_x = group.bubbles[0].x
+            # Bubble x = column_origin + label_column_width + column_padding/2 + radius
+            column_origin = first_bubble_x - layout.radius - layout.column_padding / 2 - layout.label_column_width
+            column_origins[col_idx] = column_origin
+
     # Process each column
     for col_idx in sorted(columns.keys()):
         is_first_column = (col_idx == 0)
-        column_origin = geom.margin + col_idx * column_width
+        column_origin = column_origins.get(col_idx, geom.margin)
 
         # Get row allocations for this column
         row_allocations, _ = allocate_column_rows(section_specs, row_centers, is_first_column)
@@ -319,18 +330,32 @@ def draw_unified_bubble_section(
                 _text(pdf, geom, x_base, allocation.y_position, label_text)
 
             elif allocation.row_type == "headers":
-                # Draw option headers (A B C D)
+                # Draw option headers
                 pdf.set_font("Noto", size=10)
-                # Determine number of options based on section category
-                if allocation.section_category == "set":
-                    num_options = sheet.set_options
-                else:  # questions
-                    num_options = sheet.question_options
-                ascii_offsets = [chr(ord("A") + opt) for opt in range(num_options)]
                 x_bubble_base = x_base + layout.radius
-                for opt in range(num_options):
-                    x = x_bubble_base + opt * (layout.diameter + layout.option_gap)
-                    _text(pdf, geom, x - 3.25, allocation.y_position, ascii_offsets[opt])
+
+                # Determine headers based on section category
+                if allocation.section_category == "class":
+                    # Class headers: 6 7 8 9 10
+                    class_numbers = [6, 7, 8, 9, 10]
+                    for opt_idx, class_num in enumerate(class_numbers):
+                        x = x_bubble_base + opt_idx * (layout.diameter + layout.option_gap)
+                        # Center single digit under bubble
+                        _text(pdf, geom, x - 3.25, allocation.y_position, str(class_num))
+                elif allocation.section_category == "set":
+                    # Set headers: A B C D
+                    num_options = sheet.set_options
+                    ascii_offsets = [chr(ord("A") + opt) for opt in range(num_options)]
+                    for opt in range(num_options):
+                        x = x_bubble_base + opt * (layout.diameter + layout.option_gap)
+                        _text(pdf, geom, x - 3.25, allocation.y_position, ascii_offsets[opt])
+                else:  # questions
+                    # Question headers: A B C D
+                    num_options = sheet.question_options
+                    ascii_offsets = [chr(ord("A") + opt) for opt in range(num_options)]
+                    for opt in range(num_options):
+                        x = x_bubble_base + opt * (layout.diameter + layout.option_gap)
+                        _text(pdf, geom, x - 3.25, allocation.y_position, ascii_offsets[opt])
 
     # Draw write-in boxes for roll number
     if boxes:
@@ -367,7 +392,7 @@ def draw_unified_bubble_section(
     pdf.set_draw_color(192, 192, 192)
     pdf.set_line_width(1)
     for col, (min_y, max_y) in column_y_ranges.items():
-        column_origin = geom.margin + col * column_width
+        column_origin = column_origins.get(col, geom.margin)
         left_line_x = column_origin
         right_line_x = column_origin + layout.label_column_width
         _line(pdf, geom, left_line_x, min_y, left_line_x, max_y)
@@ -383,7 +408,8 @@ def draw_unified_bubble_section(
         if not group.bubbles:
             continue
 
-        column_origin = geom.margin + (group.column_index or 0) * column_width
+        col_idx = group.column_index or 0
+        column_origin = column_origins.get(col_idx, geom.margin)
         label_end_x = column_origin + layout.label_column_width - gap_before_bubble
 
         # Draw row label
