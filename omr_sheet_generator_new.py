@@ -235,17 +235,25 @@ def draw_grid_markers(
         if bottom_anchor_top + clearance <= y <= top_anchor_bottom - clearance
     ])
 
-    # Draw grid markers at valid bubble row positions
+    # Draw grid markers at valid bubble row positions (rectangular, 2x width, growing inward)
     pdf.set_fill_color(0, 0, 0)
+    marker_width = markers.grid_marker_size * 2
+    marker_height = markers.grid_marker_size
+
     for y in valid_positions:
-        for x in (geom.margin / 2, geom.width - geom.margin / 2 - markers.grid_marker_size):
+        # Left marker: starts at edge, extends right (inward)
+        left_x = geom.margin / 2
+        # Right marker: positioned to extend left (inward)
+        right_x = geom.width - geom.margin / 2 - marker_width
+
+        for x in (left_x, right_x):
             _rect(
                 pdf,
                 geom,
                 x,
-                y - markers.grid_marker_size / 2,  # Center marker on bubble row
-                markers.grid_marker_size,
-                markers.grid_marker_size,
+                y - marker_height / 2,  # Center marker on bubble row
+                marker_width,
+                marker_height,
                 style=RenderStyle.F,
             )
 
