@@ -415,5 +415,5 @@ def generate_omr_sheet(output_path: Path) -> None:
 
 
 if __name__ == "__main__":
-    target_path = Path("sheets") / "omr_sheet_fpdf.pdf"
+    target_path = Path("sheets") / "omr_sheet.pdf"
     generate_omr_sheet(target_path)
