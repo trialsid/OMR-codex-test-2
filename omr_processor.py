@@ -754,10 +754,60 @@ def process_omr_sheet(
 
 def main():
     """Main entry point."""
+    import argparse
+    import json
+    from omr_config_loader import load_sheet_config
+
+    parser = argparse.ArgumentParser(
+        description="Process scanned OMR sheets",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python omr_processor.py                             # Process with defaults
+  python omr_processor.py --questions 50              # Process sheet with 50 questions
+  python omr_processor.py --config midterm.json       # Use config file
+  python omr_processor.py --config midterm.json --questions 60  # Config + override
+        """
+    )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        metavar="FILE",
+        help="Path to JSON configuration file (must match generator config)"
+    )
+    parser.add_argument(
+        "--questions",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Maximum number of questions (must match generator, overrides config)"
+    )
+
+    args = parser.parse_args()
+
+    # Load configuration
     geom = PageGeometry()
     layout = BubbleLayout()
-    sheet = SheetLayout()
     markers_cfg = MarkerConfig()
+
+    if args.config:
+        # Load from config file
+        try:
+            sheet = load_sheet_config(args.config)
+            print(f"Loaded configuration from: {args.config}")
+        except (FileNotFoundError, ValueError, json.JSONDecodeError) as e:
+            print(f"Error loading config file: {e}")
+            exit(1)
+
+        # Override max_questions if specified on command line
+        if args.questions is not None:
+            from dataclasses import replace
+            sheet = replace(sheet, max_questions=args.questions)
+            print(f"Overriding max_questions to: {args.questions}")
+    else:
+        # Create sheet layout with max_questions if specified
+        sheet = SheetLayout(max_questions=args.questions)
 
     # Process all images in sheets/ directory
     sheets_dir = Path("sheets")

@@ -434,11 +434,18 @@ def ensure_output_directory(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
 
-def generate_omr_sheet(output_path: Path) -> None:
+def generate_omr_sheet(output_path: Path, sheet: SheetLayout | None = None) -> None:
+    """Generate an OMR sheet PDF.
+
+    Args:
+        output_path: Path where PDF will be saved
+        sheet: Sheet layout configuration (if None, uses default)
+    """
     geom = PageGeometry()
     layout = BubbleLayout()
     markers = MarkerConfig()
-    sheet = SheetLayout()
+    if sheet is None:
+        sheet = SheetLayout()
 
     ensure_output_directory(output_path.parent)
     pdf = OMRPDF(geom)
@@ -454,5 +461,63 @@ def generate_omr_sheet(output_path: Path) -> None:
 
 
 if __name__ == "__main__":
-    target_path = Path("sheets") / "omr_sheet.pdf"
-    generate_omr_sheet(target_path)
+    import argparse
+    import json
+    from omr_config_loader import load_sheet_config
+
+    parser = argparse.ArgumentParser(
+        description="Generate OMR answer sheet PDF",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python omr_sheet_generator_new.py                           # Generate with defaults
+  python omr_sheet_generator_new.py --questions 50            # 50 questions
+  python omr_sheet_generator_new.py --config midterm.json     # Use config file
+  python omr_sheet_generator_new.py --config midterm.json --questions 60  # Config + override
+        """
+    )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        metavar="FILE",
+        help="Path to JSON configuration file (e.g., sheet_config.json)"
+    )
+    parser.add_argument(
+        "--questions",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Maximum number of questions (overrides config file if both specified)"
+    )
+    parser.add_argument(
+        "-o", "--output",
+        type=str,
+        default="sheets/omr_sheet.pdf",
+        metavar="PATH",
+        help="Output PDF file path (default: sheets/omr_sheet.pdf)"
+    )
+
+    args = parser.parse_args()
+
+    # Load configuration
+    if args.config:
+        # Load from config file
+        try:
+            sheet = load_sheet_config(args.config)
+            print(f"Loaded configuration from: {args.config}")
+        except (FileNotFoundError, ValueError, json.JSONDecodeError) as e:
+            print(f"Error loading config file: {e}")
+            exit(1)
+
+        # Override max_questions if specified on command line
+        if args.questions is not None:
+            from dataclasses import replace
+            sheet = replace(sheet, max_questions=args.questions)
+            print(f"Overriding max_questions to: {args.questions}")
+    else:
+        # Create sheet layout with max_questions if specified
+        sheet = SheetLayout(max_questions=args.questions)
+
+    target_path = Path(args.output)
+    generate_omr_sheet(target_path, sheet)

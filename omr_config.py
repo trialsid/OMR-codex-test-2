@@ -80,6 +80,7 @@ class SheetLayout:
 
     # Question section (fills remaining rows)
     question_options: int = 4
+    max_questions: int | None = None  # Maximum number of questions (None = fill available space)
 
     def __post_init__(self):
         """Validate configuration."""
@@ -88,6 +89,8 @@ class SheetLayout:
         assert self.roll_rows > 0, "Roll rows must be positive"
         assert self.set_options > 0, "Set options must be positive"
         assert self.question_options > 0, "Question options must be positive"
+        if self.max_questions is not None:
+            assert self.max_questions > 0, "Max questions must be positive if specified"
 
 
 # Default configuration instance

@@ -368,7 +368,11 @@ def generate_all_bubble_coordinates(
         current_x += other_column_width
 
     # Process each column
+    reached_max_questions = False
     for col_idx, column_origin in enumerate(column_positions):
+        if reached_max_questions:
+            break
+
         is_first_column = (col_idx == 0)
 
         # Allocate rows for this column
@@ -379,6 +383,12 @@ def generate_all_bubble_coordinates(
         # Generate bubble groups based on row allocations
         for allocation in row_allocations:
             if allocation.row_type == "bubbles":
+                # Check if we've reached max_questions before creating more question groups
+                if allocation.section_category == "question" and sheet.max_questions is not None:
+                    if question_counter > sheet.max_questions:
+                        reached_max_questions = True
+                        break
+
                 # Create bubble group
                 group = create_bubble_group_from_allocation(
                     allocation, column_origin, layout, sheet, col_idx, question_counter
@@ -405,6 +415,12 @@ def generate_all_bubble_coordinates(
         if group.category == "roll":
             for bubble in group.bubbles:
                 roll_bottom = min(roll_bottom, bubble.y - bubble.radius) if roll_bottom else bubble.y - bubble.radius
+
+    # Check if max_questions was requested but couldn't all fit
+    actual_questions = question_counter - 1  # question_counter is 1-indexed
+    if sheet.max_questions is not None and actual_questions < sheet.max_questions:
+        print(f"Warning: Requested {sheet.max_questions} questions but only {actual_questions} fit in available space.")
+        print(f"Generated sheet with {actual_questions} questions.")
 
     return all_groups, all_boxes, roll_bottom
 
