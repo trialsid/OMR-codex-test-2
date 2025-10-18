@@ -39,8 +39,7 @@ def load_sheet_config(config_path: Path | str) -> SheetLayout:
         valid_params["class_options"] = config_dict["class_options"]
     if "roll_columns" in config_dict:
         valid_params["roll_columns"] = config_dict["roll_columns"]
-    if "roll_rows" in config_dict:
-        valid_params["roll_rows"] = config_dict["roll_rows"]
+    # Note: roll_rows removed - always 10 for digits 0-9
     if "set_options" in config_dict:
         valid_params["set_options"] = config_dict["set_options"]
     if "question_options" in config_dict:
@@ -66,7 +65,6 @@ def save_sheet_config(sheet: SheetLayout, config_path: Path | str) -> None:
     config_dict = {
         "class_options": sheet.class_options,
         "roll_columns": sheet.roll_columns,
-        "roll_rows": sheet.roll_rows,
         "set_options": sheet.set_options,
         "question_options": sheet.question_options,
     }

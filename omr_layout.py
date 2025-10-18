@@ -155,7 +155,7 @@ def build_section_specifications(sheet: SheetLayout) -> List[SectionSpec]:
         SectionSpec(
             category="roll",
             label="Roll Number",
-            bubble_rows=sheet.roll_rows,
+            bubble_rows=10,  # Always 10 rows for digits 0-9
             has_label_row=True,
             has_spacer_after=True,
             has_special_row=True,

@@ -72,8 +72,8 @@ class SheetLayout:
     class_options: int = 5  # Classes 6-10
 
     # Roll number section (second in column)
+    # Note: Roll numbers always have 10 rows (digits 0-9)
     roll_columns: int = 3
-    roll_rows: int = 10
 
     # Set section (third in column)
     set_options: int = 4  # Sets A-D
@@ -86,7 +86,6 @@ class SheetLayout:
         """Validate configuration."""
         assert self.class_options > 0, "Class options must be positive"
         assert self.roll_columns > 0, "Roll columns must be positive"
-        assert self.roll_rows > 0, "Roll rows must be positive"
         assert self.set_options > 0, "Set options must be positive"
         assert self.question_options > 0, "Question options must be positive"
         if self.max_questions is not None:
