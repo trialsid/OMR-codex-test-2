@@ -89,7 +89,7 @@ def _line(
     pdf.line(x1, geom.height - y1, x2, geom.height - y2)
 
 
-def draw_header_section(pdf: OMRPDF, geom: PageGeometry) -> None:
+def draw_header_section(pdf: OMRPDF, geom: PageGeometry, markers: MarkerConfig) -> None:
     """Render the header band with title, exam info, and instructions."""
 
     header_bottom = geom.header_bottom
@@ -105,9 +105,14 @@ def draw_header_section(pdf: OMRPDF, geom: PageGeometry) -> None:
     pdf.set_fill_color(247, 248, 250)
     _rect(pdf, geom, 0, header_bottom, geom.width, header_height, style=RenderStyle.F)
 
+    # Calculate anchor positions to determine line boundaries
+    anchor_positions = calculate_anchor_positions(geom, markers)
+    line_left = anchor_positions["top_left"][0]
+    line_right = anchor_positions["top_right"][0] + markers.anchor_size
+
     pdf.set_draw_color(185, 185, 185)
     pdf.set_line_width(1.2)
-    _line(pdf, geom, geom.margin, header_bottom, geom.width - geom.margin, header_bottom)
+    _line(pdf, geom, line_left, header_bottom, line_right, header_bottom)
     pdf.set_draw_color(0, 0, 0)
 
     # Title section - hierarchical flow (PaperGen style)
@@ -136,7 +141,7 @@ def draw_header_section(pdf: OMRPDF, geom: PageGeometry) -> None:
     line_y = header_top - 50
     pdf.set_draw_color(185, 185, 185)
     pdf.set_line_width(1.2)
-    _line(pdf, geom, geom.margin, line_y, geom.width - geom.margin, line_y)
+    _line(pdf, geom, line_left, line_y, line_right, line_y)
     pdf.set_draw_color(0, 0, 0)
 
     inner_width = geom.inner_width
@@ -459,7 +464,7 @@ def generate_omr_sheet(output_path: Path, sheet: SheetLayout | None = None) -> N
 
     bubble_groups, roll_boxes, roll_bottom = generate_all_bubble_coordinates(geom, layout, sheet, markers)
 
-    draw_header_section(pdf, geom)
+    draw_header_section(pdf, geom, markers)
     draw_anchor_markers(pdf, geom, markers)
     draw_grid_markers(pdf, geom, markers, bubble_groups)
     draw_unified_bubble_section(pdf, geom, layout, sheet, markers, bubble_groups, roll_boxes)
