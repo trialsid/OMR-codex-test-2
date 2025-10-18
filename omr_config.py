@@ -71,11 +71,14 @@ class SheetLayout:
     # Class section (first in column)
     class_options: int = 5  # Classes 6-10
 
-    # Roll number section (second in column)
+    # Class section/division (second in column)
+    class_section_options: int = 3  # Class sections (a, b, c)
+
+    # Roll number section (third in column)
     # Note: Roll numbers always have 10 rows (digits 0-9)
     roll_columns: int = 3
 
-    # Set section (third in column)
+    # Set section (fourth in column)
     set_options: int = 4  # Sets A-D
 
     # Question section (fills remaining rows)
@@ -85,6 +88,7 @@ class SheetLayout:
     def __post_init__(self):
         """Validate configuration."""
         assert self.class_options > 0, "Class options must be positive"
+        assert self.class_section_options >= 0, "Class section options must be non-negative"
         assert self.roll_columns > 0, "Roll columns must be positive"
         assert self.set_options > 0, "Set options must be positive"
         assert self.question_options > 0, "Question options must be positive"

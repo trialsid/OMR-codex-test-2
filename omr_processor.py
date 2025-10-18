@@ -604,6 +604,32 @@ def overlay_labels(image: np.ndarray, group_samples: List[BubbleGroupSample]) ->
                     thickness,
                 )
 
+        elif sample.group.category == "class_section":
+            # Class section: Draw "Sec" label above first bubble and section letters inside bubbles
+            first_detection = sample.detections[0]
+            label_text = "Sec"
+            font_scale = 0.35
+            text_size = cv2.getTextSize(label_text, font, font_scale, thickness)[0]
+            text_x = first_detection.bubble.x - text_size[0] // 2
+            text_y = first_detection.bubble.y - first_detection.bubble.radius - 5
+            cv2.putText(output, label_text, (text_x, text_y), font, font_scale, (0, 0, 255), thickness)
+
+            # Draw section letter (a/b/c/d) inside each bubble
+            for detection in sample.detections:
+                section_text = detection.layout.label
+                section_size = cv2.getTextSize(section_text, font, 0.4, thickness)[0]
+                text_x = detection.bubble.x - section_size[0] // 2
+                text_y = detection.bubble.y + section_size[1] // 2
+                cv2.putText(
+                    output,
+                    section_text,
+                    (text_x, text_y),
+                    font,
+                    0.4,
+                    (0, 128, 0),
+                    thickness,
+                )
+
         elif sample.group.category == "set":
             # Set: Draw "Set" label above first bubble and option letters inside bubbles
             first_detection = sample.detections[0]
@@ -724,7 +750,7 @@ def process_omr_sheet(
 
     # Build summary message
     summary_parts = []
-    for category in ["class", "roll", "set", "question"]:
+    for category in ["class", "class_section", "roll", "set", "question"]:
         if category in category_counts:
             counts = category_counts[category]
             if category == "roll":

@@ -324,7 +324,7 @@ def draw_unified_bubble_section(
 
             if allocation.row_type == "label":
                 # Draw section label
-                section_labels = {"class": "Class", "roll": "Roll Number", "set": "Set", "question": "Questions"}
+                section_labels = {"class": "Class", "class_section": "Class section", "roll": "Roll Number", "set": "Set", "question": "Questions"}
                 label_text = section_labels.get(allocation.section_category, "")
                 pdf.set_font("Noto", "B", size=11)
                 _text(pdf, geom, x_base, allocation.y_position, label_text)
@@ -342,6 +342,13 @@ def draw_unified_bubble_section(
                         x = x_bubble_base + opt_idx * (layout.diameter + layout.option_gap)
                         # Center single digit under bubble
                         _text(pdf, geom, x - 3.25, allocation.y_position, str(class_num))
+                elif allocation.section_category == "class_section":
+                    # Class section headers: a b c d (lowercase)
+                    section_labels = [chr(ord("a") + i) for i in range(sheet.class_section_options)]
+                    for opt_idx, label in enumerate(section_labels):
+                        x = x_bubble_base + opt_idx * (layout.diameter + layout.option_gap)
+                        # Center single character under bubble
+                        _text(pdf, geom, x - 3.25, allocation.y_position, label)
                 elif allocation.section_category == "set":
                     # Set headers: A B C D
                     num_options = sheet.set_options

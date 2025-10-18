@@ -152,6 +152,23 @@ def build_section_specifications(sheet: SheetLayout) -> List[SectionSpec]:
             has_special_row=True,  # Number headers (6 7 8 9 10) above bubbles
             special_row_position="before",
         ),
+    ]
+
+    # Add class section only if configured (skip when 0)
+    if sheet.class_section_options > 0:
+        specs.append(
+            SectionSpec(
+                category="class_section",
+                label="Class section",
+                bubble_rows=1,  # Single row with all options horizontal
+                has_label_row=True,
+                has_spacer_after=True,
+                has_special_row=True,  # Option headers (a b c d) above bubbles
+                special_row_position="before",
+            )
+        )
+
+    specs.extend([
         SectionSpec(
             category="roll",
             label="Roll Number",
@@ -179,7 +196,7 @@ def build_section_specifications(sheet: SheetLayout) -> List[SectionSpec]:
             has_special_row=True,
             special_row_position="before",
         ),
-    ]
+    ])
     return specs
 
 
@@ -336,8 +353,8 @@ def generate_all_bubble_coordinates(
         return [], [], 0
 
     # Calculate column widths responsively
-    # First column needs to fit all sections: Class, Roll, Set, and Questions
-    first_column_options = max(sheet.class_options, sheet.roll_columns, sheet.set_options, sheet.question_options)
+    # First column needs to fit all sections: Class, Class Section, Roll, Set, and Questions
+    first_column_options = max(sheet.class_options, sheet.class_section_options, sheet.roll_columns, sheet.set_options, sheet.question_options)
     first_column_width = layout.group_width(first_column_options)
 
     # Subsequent columns only have Questions(4)
@@ -452,6 +469,18 @@ def create_bubble_group_from_allocation(
             x = x_base + opt_idx * (layout.diameter + layout.option_gap)
             bubbles.append(
                 BubbleCoordinate(x=x, y=y, radius=layout.radius, label=str(class_num), index=opt_idx)
+            )
+
+    elif allocation.section_category == "class_section":
+        # Generate class section labels dynamically based on config (lowercase a, b, c, ...)
+        section_labels = [chr(ord("a") + i) for i in range(sheet.class_section_options)]
+        display_label = ""  # No individual display label for horizontal layout
+        group_index = 0  # Single group for all section options
+        # Multiple bubbles horizontal
+        for opt_idx, label in enumerate(section_labels):
+            x = x_base + opt_idx * (layout.diameter + layout.option_gap)
+            bubbles.append(
+                BubbleCoordinate(x=x, y=y, radius=layout.radius, label=label, index=opt_idx)
             )
 
     elif allocation.section_category == "roll":

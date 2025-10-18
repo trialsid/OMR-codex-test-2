@@ -157,6 +157,7 @@ The `sheet_config.json` file controls these fields:
 ```json
 {
   "class_options": 5,
+  "class_section_options": 3,
   "roll_columns": 3,
   "set_options": 4,
   "question_options": 4,
@@ -166,6 +167,7 @@ The `sheet_config.json` file controls these fields:
 
 **Fields:**
 - `class_options` – Number of class/grade bubbles (e.g., 5 for grades 6-10)
+- `class_section_options` – Number of class section/division bubbles (e.g., 3 for sections a, b, c). Set to 0 to skip this section entirely.
 - `roll_columns` – Number of digits in the roll number (e.g., 3 for roll numbers 000-999). Roll numbers always have 10 rows for digits 0-9.
 - `set_options` – Number of test set/version bubbles (e.g., 4 for sets A-D)
 - `question_options` – Number of answer choices per question (typically 4 for A/B/C/D)
@@ -217,6 +219,7 @@ from omr_config_loader import save_sheet_config
 # Create custom layout
 layout = SheetLayout(
     class_options=5,
+    class_section_options=3,  # Class sections (a, b, c)
     roll_columns=4,  # 4-digit roll numbers (always 10 rows for digits 0-9)
     set_options=4,
     question_options=5,  # A/B/C/D/E
