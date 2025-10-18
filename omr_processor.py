@@ -11,11 +11,12 @@ The processed images are saved to the ``processed/`` directory.
 """
 from __future__ import annotations
 
+import csv
 import cv2
 import numpy as np
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict
 
 from omr_config import PageGeometry, BubbleLayout, MarkerConfig, SheetLayout
 from omr_layout import (
@@ -685,6 +686,109 @@ def overlay_labels(image: np.ndarray, group_samples: List[BubbleGroupSample]) ->
     return output
 
 
+def export_to_csv(
+    filename: str,
+    group_samples: List[GroupSample],
+    csv_path: Path,
+    sheet: SheetLayout,
+) -> None:
+    """Export detected bubble fills to CSV file.
+
+    Args:
+        filename: Name of the source image file
+        group_samples: List of bubble group samples with detection results
+        csv_path: Path where CSV file will be saved
+        sheet: Sheet layout configuration for determining max questions
+    """
+    # Organize results by category
+    results: Dict[str, str] = {}
+    results["filename"] = filename
+
+    # Initialize all fields to BLANK
+    results["class"] = "BLANK"
+    results["class_section"] = "BLANK"
+    results["roll_number"] = "BLANK"
+    results["set"] = "BLANK"
+
+    for sample in group_samples:
+        category = sample.group.category
+        filled_labels = [
+            detection.layout.label
+            for detection in sample.detections
+            if detection.bubble.is_filled
+        ]
+
+        if category == "class":
+            # Single selection expected
+            results["class"] = filled_labels[0] if filled_labels else "BLANK"
+
+        elif category == "class_section":
+            # Single selection expected
+            results["class_section"] = filled_labels[0] if filled_labels else "BLANK"
+
+        elif category == "roll":
+            # Multiple columns - organize digits by column index
+            if "roll_digits" not in results:
+                results["roll_digits"] = {}
+            for detection in sample.detections:
+                if detection.bubble.is_filled:
+                    col_idx = detection.layout.index
+                    if col_idx not in results["roll_digits"]:
+                        results["roll_digits"][col_idx] = []
+                    results["roll_digits"][col_idx].append(detection.layout.label)
+
+        elif category == "set":
+            # Single selection expected
+            results["set"] = filled_labels[0] if filled_labels else "BLANK"
+
+        elif category == "question":
+            # Question number from display_label
+            q_num = sample.group.display_label
+            # Multiple selections allowed - comma-separated
+            if filled_labels:
+                results[f"Q{q_num}"] = ",".join(filled_labels)
+            else:
+                results[f"Q{q_num}"] = "BLANK"
+
+    # Concatenate roll number digits by column order
+    if "roll_digits" in results:
+        if results["roll_digits"]:
+            # Sort by column index and concatenate the first filled digit from each column
+            digit_parts = []
+            for col_idx in sorted(results["roll_digits"].keys()):
+                digits = results["roll_digits"][col_idx]
+                # Use first filled digit if multiple (shouldn't happen but handle it)
+                digit_parts.append(digits[0] if digits else "")
+            results["roll_number"] = "".join(digit_parts) if digit_parts else "BLANK"
+        else:
+            results["roll_number"] = "BLANK"
+        del results["roll_digits"]
+    else:
+        results["roll_number"] = "BLANK"
+
+    # Determine max questions from sheet config
+    max_q = sheet.max_questions if sheet.max_questions else 50
+
+    # Build CSV header
+    header = ["filename", "class", "class_section", "roll_number", "set"]
+    header.extend([f"Q{i}" for i in range(1, max_q + 1)])
+
+    # Fill missing question columns with BLANK
+    for i in range(1, max_q + 1):
+        key = f"Q{i}"
+        if key not in results:
+            results[key] = "BLANK"
+
+    # Write CSV
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.DictWriter(f, fieldnames=header)
+        writer.writeheader()
+        writer.writerow(results)
+
+    print(f"Saved CSV results to {csv_path}")
+
+
 def process_omr_sheet(
     input_path: Path,
     output_path: Path,
@@ -770,10 +874,14 @@ def process_omr_sheet(
     # Overlay labels
     labeled = overlay_labels(corrected, group_samples)
 
-    # Save output
+    # Save output image
     output_path.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(output_path), labeled)
     print(f"Saved processed image to {output_path}")
+
+    # Export results to CSV
+    csv_path = output_path.with_suffix('.csv')
+    export_to_csv(input_path.name, group_samples, csv_path, sheet)
 
     return True
 

@@ -11,9 +11,10 @@ omr_realtime_scanner.py
 sheets/*
 !sheets/omr_sheet.png
 
-# Processed OMR sheets (except processed_omr_sheet.png)
+# Processed OMR sheets (except processed_omr_sheet.png and .csv)
 processed/*
 !processed/processed_omr_sheet.png
+!processed/processed_omr_sheet.csv
 
 # Distortion test outputs
 distortion_tests/
