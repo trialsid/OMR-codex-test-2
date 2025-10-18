@@ -336,8 +336,8 @@ def generate_all_bubble_coordinates(
         return [], [], 0
 
     # Calculate column widths responsively
-    # First column needs to fit: Class(5), Roll(3), Set(4) → max = 5
-    first_column_options = max(sheet.class_options, sheet.roll_columns, sheet.set_options)
+    # First column needs to fit all sections: Class, Roll, Set, and Questions
+    first_column_options = max(sheet.class_options, sheet.roll_columns, sheet.set_options, sheet.question_options)
     first_column_width = layout.group_width(first_column_options)
 
     # Subsequent columns only have Questions(4)
@@ -443,10 +443,11 @@ def create_bubble_group_from_allocation(
 
     # Determine group index and label
     if allocation.section_category == "class":
-        class_numbers = [6, 7, 8, 9, 10]  # Classes 6-10
+        # Generate class numbers dynamically based on config (starting from 6)
+        class_numbers = [6 + i for i in range(sheet.class_options)]
         display_label = ""  # No individual display label for horizontal layout
         group_index = 0  # Single group for all class options
-        # Multiple bubbles horizontal (6, 7, 8, 9, 10)
+        # Multiple bubbles horizontal
         for opt_idx, class_num in enumerate(class_numbers):
             x = x_base + opt_idx * (layout.diameter + layout.option_gap)
             bubbles.append(
@@ -465,10 +466,11 @@ def create_bubble_group_from_allocation(
             )
 
     elif allocation.section_category == "set":
-        set_labels = ["A", "B", "C", "D"]
+        # Generate set labels dynamically based on config (A, B, C, ...)
+        set_labels = [chr(ord("A") + i) for i in range(sheet.set_options)]
         display_label = ""  # No individual display label for horizontal layout
         group_index = 0  # Single group for all set options
-        # Multiple bubbles horizontal (A, B, C, D)
+        # Multiple bubbles horizontal
         for opt_idx, label in enumerate(set_labels):
             x = x_base + opt_idx * (layout.diameter + layout.option_gap)
             bubbles.append(

@@ -1,8 +1,8 @@
 {
-  "class_options": 5,
-  "roll_columns": 3,
+  "class_options": 2,
+  "roll_columns": 2,
   "roll_rows": 10,
-  "set_options": 4,
-  "question_options": 4,
+  "set_options": 2,
+  "question_options": 7,
   "max_questions": 50
 }

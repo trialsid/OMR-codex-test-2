@@ -336,8 +336,8 @@ def draw_unified_bubble_section(
 
                 # Determine headers based on section category
                 if allocation.section_category == "class":
-                    # Class headers: 6 7 8 9 10
-                    class_numbers = [6, 7, 8, 9, 10]
+                    # Class headers: dynamically generated based on config
+                    class_numbers = [6 + i for i in range(sheet.class_options)]
                     for opt_idx, class_num in enumerate(class_numbers):
                         x = x_bubble_base + opt_idx * (layout.diameter + layout.option_gap)
                         # Center single digit under bubble
