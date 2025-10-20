@@ -4,6 +4,7 @@ This module contains all layout parameters used by both the generator and proces
 to ensure they remain synchronized.
 """
 from dataclasses import dataclass
+from typing import List
 
 
 @dataclass(frozen=True)
@@ -66,6 +67,20 @@ class MarkerConfig:
 
 
 @dataclass(frozen=True)
+class QuestionOptionRange:
+    """Defines a range of questions with a specific number of options."""
+    start: int
+    end: int
+    options: int
+
+    def __post_init__(self):
+        """Validate range."""
+        assert self.start > 0, "Question start must be positive"
+        assert self.end >= self.start, "Question end must be >= start"
+        assert self.options > 0, "Question options must be positive"
+
+
+@dataclass(frozen=True)
 class SheetLayout:
     """Complete OMR sheet layout configuration."""
     # Class section (first in column)
@@ -82,8 +97,7 @@ class SheetLayout:
     set_options: int = 4  # Sets A-D
 
     # Question section (fills remaining rows)
-    question_options: int = 4
-    max_questions: int | None = None  # Maximum number of questions (None = fill available space)
+    question_option_ranges: List[QuestionOptionRange] = None
 
     def __post_init__(self):
         """Validate configuration."""
@@ -91,9 +105,41 @@ class SheetLayout:
         assert self.class_section_options >= 0, "Class section options must be non-negative"
         assert self.roll_columns > 0, "Roll columns must be positive"
         assert self.set_options > 0, "Set options must be positive"
-        assert self.question_options > 0, "Question options must be positive"
-        if self.max_questions is not None:
-            assert self.max_questions > 0, "Max questions must be positive if specified"
+
+        # Validate question ranges
+        if self.question_option_ranges:
+            # Check for gaps and overlaps
+            sorted_ranges = sorted(self.question_option_ranges, key=lambda r: r.start)
+            for i, range_obj in enumerate(sorted_ranges):
+                if i == 0:
+                    assert range_obj.start == 1, "First question range must start at 1"
+                else:
+                    prev_range = sorted_ranges[i - 1]
+                    assert range_obj.start == prev_range.end + 1, \
+                        f"Question ranges must be contiguous: gap between {prev_range.end} and {range_obj.start}"
+
+    @property
+    def max_questions(self) -> int | None:
+        """Derive maximum number of questions from ranges."""
+        if not self.question_option_ranges:
+            return None
+        return max(r.end for r in self.question_option_ranges)
+
+    def get_question_options(self, question_number: int) -> int | None:
+        """Get the number of options for a specific question number.
+
+        Args:
+            question_number: The question number to query
+
+        Returns:
+            Number of options for that question, or None if not in any range
+        """
+        if not self.question_option_ranges:
+            return None
+        for range_obj in self.question_option_ranges:
+            if range_obj.start <= question_number <= range_obj.end:
+                return range_obj.options
+        return None
 
 
 # Default configuration instance
@@ -101,5 +147,7 @@ DEFAULT_CONFIG = {
     'geometry': PageGeometry(),
     'layout': BubbleLayout(),
     'markers': MarkerConfig(),
-    'sheet': SheetLayout(),
+    'sheet': SheetLayout(
+        question_option_ranges=[QuestionOptionRange(start=1, end=50, options=4)]
+    ),
 }

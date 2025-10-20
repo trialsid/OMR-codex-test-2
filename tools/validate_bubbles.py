@@ -12,10 +12,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from typing import List, Tuple, Optional
+import argparse
+import json
 import numpy as np
 import cv2
 
 from omr_config import PageGeometry, BubbleLayout, SheetLayout, MarkerConfig
+from omr_config_loader import load_sheet_config
 from omr_layout import BubbleGroup, BubbleCoordinate, generate_all_bubble_coordinates
 
 
@@ -154,17 +157,17 @@ def create_visualization(
     cv2.imwrite(str(output_path), vis)
 
 
-def validate_bubbles(image_path: Path, output_path: Path) -> None:
+def validate_bubbles(image_path: Path, output_path: Path, sheet: SheetLayout) -> None:
     """Validate bubble positions in an OMR sheet image.
 
     Args:
         image_path: Path to the OMR sheet image
         output_path: Path to save visualization
+        sheet: Sheet layout configuration
     """
     # Load configuration
     geom = PageGeometry()
     layout = BubbleLayout()
-    sheet = SheetLayout()
     markers = MarkerConfig()
 
     # Load image
@@ -177,7 +180,7 @@ def validate_bubbles(image_path: Path, output_path: Path) -> None:
     print(f"PDF dimensions: {geom.width}x{geom.height} points")
 
     # Generate expected bubble coordinates
-    bubble_groups, _, _ = generate_all_bubble_coordinates(geom, layout, sheet, markers)
+    bubble_groups, _, _, _ = generate_all_bubble_coordinates(geom, layout, sheet, markers)
     all_bubbles: List[tuple[BubbleGroup, BubbleCoordinate]] = [
         (group, bubble)
         for group in bubble_groups
@@ -273,8 +276,39 @@ def validate_bubbles(image_path: Path, output_path: Path) -> None:
 
 
 if __name__ == "__main__":
-    sheets_dir = Path("sheets")
-    input_image = sheets_dir / "omr_sheet.png"
-    output_image = sheets_dir / "bubble_validation.png"
+    parser = argparse.ArgumentParser(
+        description="Validate OMR sheet bubble positions using Hough circle detection"
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        help="Path to sheet_config.json file (optional, uses defaults if not provided)"
+    )
+    parser.add_argument(
+        "--input",
+        type=Path,
+        default=Path("sheets/omr_sheet.png"),
+        help="Path to input OMR sheet image (default: sheets/omr_sheet.png)"
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("sheets/bubble_validation.png"),
+        help="Path to save validation visualization (default: sheets/bubble_validation.png)"
+    )
 
-    validate_bubbles(input_image, output_image)
+    args = parser.parse_args()
+
+    # Load sheet configuration
+    if args.config:
+        try:
+            sheet = load_sheet_config(args.config)
+            print(f"Loaded configuration from: {args.config}")
+        except (FileNotFoundError, ValueError, json.JSONDecodeError) as e:
+            print(f"Error loading config: {e}")
+            sys.exit(1)
+    else:
+        sheet = SheetLayout()
+        print("Using default sheet configuration")
+
+    validate_bubbles(args.input, args.output, sheet)

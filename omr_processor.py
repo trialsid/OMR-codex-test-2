@@ -415,7 +415,7 @@ def sample_bubbles_from_coordinates(
         return []
 
     # Generate bubble coordinates using shared logic
-    layout_groups, _, _ = generate_all_bubble_coordinates(geom, layout, sheet, markers)
+    layout_groups, _, _, _ = generate_all_bubble_coordinates(geom, layout, sheet, markers)
 
     height, width = corrected.shape[:2]
     gray = cv2.cvtColor(corrected, cv2.COLOR_BGR2GRAY) if corrected.ndim == 3 else corrected
@@ -934,14 +934,22 @@ Examples:
             print(f"Error loading config file: {e}")
             exit(1)
 
-        # Override max_questions if specified on command line
+        # Override question ranges if specified on command line
         if args.questions is not None:
             from dataclasses import replace
-            sheet = replace(sheet, max_questions=args.questions)
-            print(f"Overriding max_questions to: {args.questions}")
+            from omr_config import QuestionOptionRange
+            # Create a single range with default 4 options per question
+            new_ranges = [QuestionOptionRange(start=1, end=args.questions, options=4)]
+            sheet = replace(sheet, question_option_ranges=new_ranges)
+            print(f"Overriding question ranges to: 1-{args.questions} with 4 options each")
     else:
-        # Create sheet layout with max_questions if specified
-        sheet = SheetLayout(max_questions=args.questions)
+        # Create sheet layout with question range if specified
+        if args.questions is not None:
+            from omr_config import QuestionOptionRange
+            question_ranges = [QuestionOptionRange(start=1, end=args.questions, options=4)]
+            sheet = SheetLayout(question_option_ranges=question_ranges)
+        else:
+            sheet = SheetLayout()
 
     # Process all images in sheets/ directory
     sheets_dir = Path("sheets")

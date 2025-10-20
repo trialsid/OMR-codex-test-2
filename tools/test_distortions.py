@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import sys
 import time
+import argparse
+import json
 from pathlib import Path
 from typing import Tuple, Optional, List
 from dataclasses import dataclass
@@ -23,6 +25,7 @@ import cv2
 import numpy as np
 
 from omr_config import PageGeometry, BubbleLayout, MarkerConfig, SheetLayout
+from omr_config_loader import load_sheet_config
 from omr_processor import (
     detect_anchor_markers,
     correct_skew,
@@ -819,19 +822,53 @@ def generate_html_report(
 
 def main():
     """Main entry point."""
+    parser = argparse.ArgumentParser(
+        description="Test OMR processing robustness with various image distortions"
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        help="Path to sheet_config.json file (optional, uses defaults if not provided)"
+    )
+    parser.add_argument(
+        "--input",
+        type=Path,
+        default=Path("sheets/omr_sheet.png"),
+        help="Path to input OMR sheet image (default: sheets/omr_sheet.png)"
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("distortion_tests"),
+        help="Path to output directory for test results (default: distortion_tests)"
+    )
+
+    args = parser.parse_args()
+
     print("="*60)
     print("OMR DISTORTION TESTING")
     print("="*60)
 
+    # Load sheet configuration
+    if args.config:
+        try:
+            sheet = load_sheet_config(args.config)
+            print(f"Loaded configuration from: {args.config}")
+        except (FileNotFoundError, ValueError, json.JSONDecodeError) as e:
+            print(f"Error loading config: {e}")
+            sys.exit(1)
+    else:
+        sheet = SheetLayout()
+        print("Using default sheet configuration")
+
     # Configuration
     geom = PageGeometry()
     layout = BubbleLayout()
-    sheet = SheetLayout()
     markers_cfg = MarkerConfig()
 
     # Paths
-    input_image = Path("sheets") / "omr_sheet.png"
-    output_dir = Path("distortion_tests")
+    input_image = args.input
+    output_dir = args.output
     variations_dir = output_dir / "variations"
     anchors_dir = output_dir / "anchors"
     processed_dir = output_dir / "processed"

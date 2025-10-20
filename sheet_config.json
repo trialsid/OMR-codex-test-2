@@ -3,6 +3,9 @@
   "class_section_options": 3,
   "roll_columns": 2,
   "set_options": 5,
-  "question_options": 4,
-  "max_questions": 90
+  "question_option_ranges": [
+    {"start": 1, "end": 20, "options": 4},
+    {"start": 21, "end": 30, "options": 5},
+    {"start": 31, "end": 40, "options": 3}
+  ]
 }

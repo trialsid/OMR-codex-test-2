@@ -271,6 +271,7 @@ def draw_unified_bubble_section(
     markers: MarkerConfig,
     groups: List[BubbleGroup],
     boxes: List[BoxCoordinate],
+    column_infos: List,
 ) -> None:
     """Draw all bubble groups with proper section labels, headers, and spacers."""
     if not groups:
@@ -294,10 +295,8 @@ def draw_unified_bubble_section(
         row_centers.append(y)
         row_index += 1
 
-    # Calculate column widths (same logic as omr_layout.py)
-    first_column_options = max(sheet.class_options, sheet.roll_columns, sheet.set_options)
-    first_column_width = layout.group_width(first_column_options)
-    other_column_width = layout.group_width(sheet.question_options)
+    # Create column info lookup for per-column max options
+    column_info_map = {col_info.column_index: col_info for col_info in column_infos}
 
     # Group bubbles by column and extract column origins
     columns: dict[int, List[BubbleGroup]] = {}
@@ -317,8 +316,12 @@ def draw_unified_bubble_section(
 
     # Process each column
     for col_idx in sorted(columns.keys()):
+        col_info = column_info_map.get(col_idx)
         is_first_column = (col_idx == 0)
         column_origin = column_origins.get(col_idx, geom.margin)
+
+        # Get max options for this column
+        max_question_options_in_col = col_info.max_question_options if col_info else 4
 
         # Get row allocations for this column
         row_allocations, _ = allocate_column_rows(section_specs, row_centers, is_first_column)
@@ -362,10 +365,9 @@ def draw_unified_bubble_section(
                         x = x_bubble_base + opt * (layout.diameter + layout.option_gap)
                         _text(pdf, geom, x - 3.25, allocation.y_position, ascii_offsets[opt])
                 else:  # questions
-                    # Question headers: A B C D
-                    num_options = sheet.question_options
-                    ascii_offsets = [chr(ord("A") + opt) for opt in range(num_options)]
-                    for opt in range(num_options):
+                    # Question headers: A B C D (E...) based on max options in THIS column
+                    ascii_offsets = [chr(ord("A") + opt) for opt in range(max_question_options_in_col)]
+                    for opt in range(max_question_options_in_col):
                         x = x_bubble_base + opt * (layout.diameter + layout.option_gap)
                         _text(pdf, geom, x - 3.25, allocation.y_position, ascii_offsets[opt])
 
@@ -462,12 +464,12 @@ def generate_omr_sheet(output_path: Path, sheet: SheetLayout | None = None) -> N
     ensure_output_directory(output_path.parent)
     pdf = OMRPDF(geom)
 
-    bubble_groups, roll_boxes, roll_bottom = generate_all_bubble_coordinates(geom, layout, sheet, markers)
+    bubble_groups, roll_boxes, roll_bottom, column_infos = generate_all_bubble_coordinates(geom, layout, sheet, markers)
 
     draw_header_section(pdf, geom, markers)
     draw_anchor_markers(pdf, geom, markers)
     draw_grid_markers(pdf, geom, markers, bubble_groups)
-    draw_unified_bubble_section(pdf, geom, layout, sheet, markers, bubble_groups, roll_boxes)
+    draw_unified_bubble_section(pdf, geom, layout, sheet, markers, bubble_groups, roll_boxes, column_infos)
 
     pdf.output(str(output_path))
 
@@ -522,14 +524,22 @@ Examples:
             print(f"Error loading config file: {e}")
             exit(1)
 
-        # Override max_questions if specified on command line
+        # Override question ranges if specified on command line
         if args.questions is not None:
             from dataclasses import replace
-            sheet = replace(sheet, max_questions=args.questions)
-            print(f"Overriding max_questions to: {args.questions}")
+            from omr_config import QuestionOptionRange
+            # Create a single range with default 4 options per question
+            new_ranges = [QuestionOptionRange(start=1, end=args.questions, options=4)]
+            sheet = replace(sheet, question_option_ranges=new_ranges)
+            print(f"Overriding question ranges to: 1-{args.questions} with 4 options each")
     else:
-        # Create sheet layout with max_questions if specified
-        sheet = SheetLayout(max_questions=args.questions)
+        # Create sheet layout with question range if specified
+        if args.questions is not None:
+            from omr_config import QuestionOptionRange
+            question_ranges = [QuestionOptionRange(start=1, end=args.questions, options=4)]
+            sheet = SheetLayout(question_option_ranges=question_ranges)
+        else:
+            sheet = SheetLayout()
 
     target_path = Path(args.output)
     generate_omr_sheet(target_path, sheet)

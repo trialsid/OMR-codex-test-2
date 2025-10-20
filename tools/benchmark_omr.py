@@ -10,6 +10,8 @@ from __future__ import annotations
 import sys
 import time
 import gc
+import argparse
+import json
 from pathlib import Path
 
 # Add parent directory to path for imports
@@ -28,6 +30,7 @@ except ImportError:
     print("Warning: psutil not available, memory stats will be disabled")
 
 from omr_config import PageGeometry, BubbleLayout, MarkerConfig, SheetLayout
+from omr_config_loader import load_sheet_config
 from omr_processor import (
     detect_anchor_markers,
     correct_skew,
@@ -296,36 +299,80 @@ def print_statistics(result: BenchmarkResult) -> None:
 
 def main():
     """Main benchmark entry point."""
+    parser = argparse.ArgumentParser(
+        description="Benchmark OMR sheet processing performance"
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        help="Path to sheet_config.json file (optional, uses defaults if not provided)"
+    )
+    parser.add_argument(
+        "--input",
+        type=Path,
+        nargs="+",
+        default=[Path("sheets/omr_sheet.png")],
+        help="Path(s) to input OMR sheet image(s) (default: sheets/omr_sheet.png)"
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("benchmark_output"),
+        help="Path to output directory for benchmark results (default: benchmark_output)"
+    )
+    parser.add_argument(
+        "--iterations",
+        type=int,
+        default=100,
+        help="Number of iterations to run (default: 100)"
+    )
+    parser.add_argument(
+        "--warmup",
+        type=int,
+        default=5,
+        help="Number of warmup runs (default: 5)"
+    )
+
+    args = parser.parse_args()
+
     print("="*60)
     print("OMR SHEET PROCESSING BENCHMARK")
     print("="*60)
 
+    # Load sheet configuration
+    if args.config:
+        try:
+            sheet = load_sheet_config(args.config)
+            print(f"Loaded configuration from: {args.config}")
+        except (FileNotFoundError, ValueError, json.JSONDecodeError) as e:
+            print(f"Error loading config: {e}")
+            sys.exit(1)
+    else:
+        sheet = SheetLayout()
+        print("Using default sheet configuration")
+
     # Configuration
     geom = PageGeometry()
     layout = BubbleLayout()
-    sheet = SheetLayout()
     markers_cfg = MarkerConfig()
 
-    sheets_dir = Path("sheets")
-    benchmark_dir = Path("benchmark_output")
+    benchmark_dir = args.output
 
     # Check input files
-    image1 = sheets_dir / "omr_sheet.png"
-    image2 = sheets_dir / "omr_sheet_2.png"
+    test_images = []
+    for input_path in args.input:
+        if not input_path.exists():
+            print(f"Warning: {input_path} not found, skipping")
+        else:
+            test_images.append(input_path)
 
-    if not image1.exists():
-        print(f"Error: {image1} not found")
+    if not test_images:
+        print("Error: No valid input images found")
         return
 
-    if not image2.exists():
-        print(f"Warning: {image2} not found, will only test with omr_sheet.png")
-        test_images = [image1]
-    else:
-        test_images = [image1, image2]
-
     # Benchmark parameters
-    ITERATIONS = 100
-    WARMUP_RUNS = 5
+    ITERATIONS = args.iterations
+    WARMUP_RUNS = args.warmup
 
     all_results: List[BenchmarkResult] = []
 

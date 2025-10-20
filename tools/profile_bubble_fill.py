@@ -8,7 +8,7 @@ This script profiles the bubble fill analysis by:
 - Calculating accurate memory usage based on local region size
 
 Usage:
-    python tools/profile_bubble_fill.py
+    python tools/profile_bubble_fill.py [--config sheet_config.json] [--input path/to/image.png]
 
 Output format:
     - Image dimensions and total bubble count
@@ -20,6 +20,8 @@ This ensures profiling reflects the actual production workload.
 """
 import sys
 import time
+import argparse
+import json
 from pathlib import Path
 
 # Add parent directory to path for imports
@@ -29,14 +31,19 @@ import numpy as np
 import cv2
 
 from omr_config import PageGeometry, BubbleLayout, MarkerConfig, SheetLayout
+from omr_config_loader import load_sheet_config
 from omr_processor import detect_anchor_markers, correct_skew, analyze_bubble_fill
 from omr_layout import generate_all_bubble_coordinates
 
 
-def profile_analyze_bubble_fill():
-    """Profile the analyze_bubble_fill function with real bubble coordinates."""
+def profile_analyze_bubble_fill(image_path: Path, sheet: SheetLayout):
+    """Profile the analyze_bubble_fill function with real bubble coordinates.
+
+    Args:
+        image_path: Path to the OMR sheet image
+        sheet: Sheet layout configuration
+    """
     # Load test image
-    image_path = Path("sheets/omr_sheet.png")
     image = cv2.imread(str(image_path))
 
     if image is None:
@@ -47,7 +54,6 @@ def profile_analyze_bubble_fill():
     geom = PageGeometry()
     layout = BubbleLayout()
     markers_cfg = MarkerConfig()
-    sheet = SheetLayout()
 
     # Detect and correct
     anchor_points = detect_anchor_markers(image, geom, markers_cfg)
@@ -62,7 +68,7 @@ def profile_analyze_bubble_fill():
     print(f"Image size: {w}×{h} = {w*h:,} pixels")
 
     # Generate real bubble coordinates
-    bubble_groups, _, _ = generate_all_bubble_coordinates(geom, layout, sheet, markers_cfg)
+    bubble_groups, _, _, _ = generate_all_bubble_coordinates(geom, layout, sheet, markers_cfg)
 
     # Extract individual bubbles from groups
     all_coords = []
@@ -146,4 +152,33 @@ def profile_analyze_bubble_fill():
 
 
 if __name__ == "__main__":
-    profile_analyze_bubble_fill()
+    parser = argparse.ArgumentParser(
+        description="Profile the analyze_bubble_fill function with real bubble coordinates"
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        help="Path to sheet_config.json file (optional, uses defaults if not provided)"
+    )
+    parser.add_argument(
+        "--input",
+        type=Path,
+        default=Path("sheets/omr_sheet.png"),
+        help="Path to input OMR sheet image (default: sheets/omr_sheet.png)"
+    )
+
+    args = parser.parse_args()
+
+    # Load sheet configuration
+    if args.config:
+        try:
+            sheet = load_sheet_config(args.config)
+            print(f"Loaded configuration from: {args.config}")
+        except (FileNotFoundError, ValueError, json.JSONDecodeError) as e:
+            print(f"Error loading config: {e}")
+            sys.exit(1)
+    else:
+        sheet = SheetLayout()
+        print("Using default sheet configuration")
+
+    profile_analyze_bubble_fill(args.input, sheet)

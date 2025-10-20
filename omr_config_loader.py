@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict
 
-from omr_config import SheetLayout
+from omr_config import SheetLayout, QuestionOptionRange
 
 
 def load_sheet_config(config_path: Path | str) -> SheetLayout:
@@ -44,10 +44,17 @@ def load_sheet_config(config_path: Path | str) -> SheetLayout:
     # Note: roll_rows removed - always 10 for digits 0-9
     if "set_options" in config_dict:
         valid_params["set_options"] = config_dict["set_options"]
-    if "question_options" in config_dict:
-        valid_params["question_options"] = config_dict["question_options"]
-    if "max_questions" in config_dict:
-        valid_params["max_questions"] = config_dict["max_questions"]
+
+    # Parse question option ranges
+    if "question_option_ranges" in config_dict:
+        ranges = []
+        for range_dict in config_dict["question_option_ranges"]:
+            ranges.append(QuestionOptionRange(
+                start=range_dict["start"],
+                end=range_dict["end"],
+                options=range_dict["options"]
+            ))
+        valid_params["question_option_ranges"] = ranges
 
     try:
         return SheetLayout(**valid_params)
@@ -69,12 +76,18 @@ def save_sheet_config(sheet: SheetLayout, config_path: Path | str) -> None:
         "class_section_options": sheet.class_section_options,
         "roll_columns": sheet.roll_columns,
         "set_options": sheet.set_options,
-        "question_options": sheet.question_options,
     }
 
-    # Only include max_questions if it's set
-    if sheet.max_questions is not None:
-        config_dict["max_questions"] = sheet.max_questions
+    # Serialize question option ranges
+    if sheet.question_option_ranges:
+        config_dict["question_option_ranges"] = [
+            {
+                "start": range_obj.start,
+                "end": range_obj.end,
+                "options": range_obj.options
+            }
+            for range_obj in sheet.question_option_ranges
+        ]
 
     # Ensure directory exists
     config_path.parent.mkdir(parents=True, exist_ok=True)
