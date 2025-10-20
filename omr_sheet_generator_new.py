@@ -49,6 +49,21 @@ def _text(pdf: OMRPDF, geom: PageGeometry, x: float, y: float, text: str) -> Non
     pdf.text(x, geom.height - y, text)
 
 
+def _text_centered(pdf: OMRPDF, geom: PageGeometry, x: float, center_y: float, text: str) -> None:
+    """Render text with its vertical center aligned to the given Y coordinate.
+
+    Args:
+        pdf: PDF instance
+        geom: Page geometry
+        x: Horizontal position
+        center_y: Y coordinate where the text optical center should be
+        text: Text to render
+    """
+    # Adjust baseline down by 30% of font size for optical centering
+    baseline_y = center_y - pdf.font_size * 0.30
+    pdf.text(x, geom.height - baseline_y, text)
+
+
 def _rect(
     pdf: OMRPDF,
     geom: PageGeometry,
@@ -335,7 +350,7 @@ def draw_unified_bubble_section(
                 section_labels = {"class": "Class", "class_section": "Class section", "roll": "Roll Number", "set": "Set", "question": "Questions"}
                 label_text = section_labels.get(allocation.section_category, "")
                 pdf.set_font("Noto", "B", size=11)
-                _text(pdf, geom, x_base, allocation.y_position, label_text)
+                _text_centered(pdf, geom, x_base, allocation.y_position, label_text)
 
             elif allocation.row_type == "headers":
                 # Draw option headers
@@ -349,27 +364,27 @@ def draw_unified_bubble_section(
                     for opt_idx, class_num in enumerate(class_numbers):
                         x = x_bubble_base + opt_idx * (layout.diameter + layout.option_gap)
                         # Center single digit under bubble
-                        _text(pdf, geom, x - 3.25, allocation.y_position, str(class_num))
+                        _text_centered(pdf, geom, x - 3.25, allocation.y_position, str(class_num))
                 elif allocation.section_category == "class_section":
                     # Class section headers: a b c d (lowercase)
                     section_labels = [chr(ord("a") + i) for i in range(sheet.class_section_options)]
                     for opt_idx, label in enumerate(section_labels):
                         x = x_bubble_base + opt_idx * (layout.diameter + layout.option_gap)
                         # Center single character under bubble
-                        _text(pdf, geom, x - 3.25, allocation.y_position, label)
+                        _text_centered(pdf, geom, x - 3.25, allocation.y_position, label)
                 elif allocation.section_category == "set":
                     # Set headers: A B C D
                     num_options = sheet.set_options
                     ascii_offsets = [chr(ord("A") + opt) for opt in range(num_options)]
                     for opt in range(num_options):
                         x = x_bubble_base + opt * (layout.diameter + layout.option_gap)
-                        _text(pdf, geom, x - 3.25, allocation.y_position, ascii_offsets[opt])
+                        _text_centered(pdf, geom, x - 3.25, allocation.y_position, ascii_offsets[opt])
                 else:  # questions
                     # Question headers: A B C D (E...) based on max options in THIS column
                     ascii_offsets = [chr(ord("A") + opt) for opt in range(max_question_options_in_col)]
                     for opt in range(max_question_options_in_col):
                         x = x_bubble_base + opt * (layout.diameter + layout.option_gap)
-                        _text(pdf, geom, x - 3.25, allocation.y_position, ascii_offsets[opt])
+                        _text_centered(pdf, geom, x - 3.25, allocation.y_position, ascii_offsets[opt])
 
     # Draw write-in boxes for roll number
     if boxes:
@@ -429,8 +444,8 @@ def draw_unified_bubble_section(
         # Draw row label
         current_text_width = len(group.display_label) * digit_width
         label_x = label_end_x - current_text_width
-        label_y = group.bubbles[0].y - layout.radius / 2
-        _text(pdf, geom, label_x, label_y, group.display_label)
+        label_center_y = group.bubbles[0].y  # Use bubble center directly
+        _text_centered(pdf, geom, label_x, label_center_y, group.display_label)
 
         # Draw bubbles
         for bubble in group.bubbles:
