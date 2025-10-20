@@ -3,7 +3,7 @@
 This module contains all layout parameters used by both the generator and processor
 to ensure they remain synchronized.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List
 
 
@@ -97,7 +97,9 @@ class SheetLayout:
     set_options: int = 4  # Sets A-D
 
     # Question section (fills remaining rows)
-    question_option_ranges: List[QuestionOptionRange] = None
+    question_option_ranges: List[QuestionOptionRange] = field(
+        default_factory=lambda: [QuestionOptionRange(start=1, end=50, options=4)]
+    )
 
     def __post_init__(self):
         """Validate configuration."""
@@ -147,7 +149,5 @@ DEFAULT_CONFIG = {
     'geometry': PageGeometry(),
     'layout': BubbleLayout(),
     'markers': MarkerConfig(),
-    'sheet': SheetLayout(
-        question_option_ranges=[QuestionOptionRange(start=1, end=50, options=4)]
-    ),
+    'sheet': SheetLayout(),
 }
