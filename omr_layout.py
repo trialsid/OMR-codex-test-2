@@ -475,14 +475,14 @@ def generate_all_bubble_coordinates(
         row_index += 1
 
     if not row_centers:
-        return [], [], 0
+        return [], [], 0, []
 
     # Pass 1: Pre-calculate which questions go into which columns
     column_infos = pre_calculate_column_assignments(geom, layout, sheet, markers, row_centers)
 
     if not column_infos:
         print("Warning: Could not fit any columns on the page")
-        return [], [], 0
+        return [], [], 0, []
 
     all_groups: List[BubbleGroup] = []
     all_boxes: List[BoxCoordinate] = []
