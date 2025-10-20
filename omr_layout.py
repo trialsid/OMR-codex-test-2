@@ -431,14 +431,28 @@ def pre_calculate_column_assignments(
 
             # Detect option count transition
             if question_opts != current_header_options:
-                # Check if there's at least one more bubble row after this for the new segment
-                has_future_question_row = any(
-                    future.row_type == "bubbles" and future.section_category == "question"
-                    for future in row_allocations[idx + 1:]
+                # Count how many questions with the NEW option count remain
+                # We need at least 2 questions in the new segment to avoid orphans
+                remaining_questions_in_new_segment = 0
+                temp_counter = question_counter
+
+                while temp_counter <= (sheet.max_questions or float('inf')):
+                    temp_opts = sheet.get_question_options(temp_counter)
+                    if temp_opts is None:
+                        break
+                    if temp_opts == question_opts:
+                        remaining_questions_in_new_segment += 1
+                    temp_counter += 1
+
+                # Also check if we have enough rows
+                future_question_rows = sum(
+                    1 for future in row_allocations[idx + 1:]
+                    if future.row_type == "bubbles" and future.section_category == "question"
                 )
 
-                if not has_future_question_row:
-                    # No room for questions after header, stop here
+                if remaining_questions_in_new_segment < 2 or future_question_rows < 2:
+                    # Not enough questions in new segment OR not enough rows available
+                    # This prevents orphaned single questions at column end
                     break
 
                 # Reserve this row for transition header
@@ -582,6 +596,13 @@ def generate_all_bubble_coordinates(
                 if allocation.section_category == "question" and sheet.max_questions is not None:
                     if question_counter > sheet.max_questions:
                         reached_max_questions = True
+                        break
+
+                # Check if we've reached the end of questions for this column
+                # (pre_calculate may have stopped early due to orphan prevention)
+                if allocation.section_category == "question" and col_info.question_end is not None:
+                    if question_counter > col_info.question_end:
+                        # Stop placing questions in this column
                         break
 
                 # Create bubble group
