@@ -18,6 +18,8 @@ A Python toolkit for generating, validating, and grading optical mark recognitio
 - **Single geometry source of truth** – `omr_layout.py` computes anchors, bubble groups, roll number boxes, and question grids used by both the PDF generator and the processor.
 - **Polished PDF sheets** – `omr_sheet_generator_new.py` uses [fpdf2](https://pyfpdf.github.io/fpdf2/) with bundled Noto Sans and Stinger fonts to render classroom-ready sheets with student instructions and school branding.
 - **Robust processing pipeline** – `omr_processor.py` detects square anchor markers, applies perspective correction, samples every configured bubble with adaptive thresholding, and writes labeled overlays.
+- **Flexible question layouts** – Support for varying option counts across different question ranges (e.g., 4 options for questions 1-20, 5 options for 21-31, 3 options for 32-70) with automatic dynamic transition headers.
+- **Dynamic column width optimization** – Intelligent space utilization that adjusts column widths based on actual question option counts, fitting more questions on the page when using fewer options.
 - **Helpful tooling** – PDF-to-image conversion, benchmarking scripts, and distortion stress tests simplify experimentation with different capture setups.
 
 ## Table of contents
@@ -44,13 +46,13 @@ source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
 # 1. Generate the PDF sheet
-python omr_sheet_generator_new.py --config sheet_config.json --questions 60 --output sheets/omr_sheet.pdf
+python omr_sheet_generator_new.py --config sheet_config.json --output sheets/omr_sheet.pdf
 
 # 2. (Optional) Render PDFs to PNG for dry runs
 python pdf_to_image.py  # writes sheets/omr_sheet.png at 200 DPI
 
 # 3. Process scans or photos dropped into sheets/
-python omr_processor.py --config sheet_config.json --questions 60
+python omr_processor.py --config sheet_config.json
 ```
 
 Processed images appear in `processed/processed_<filename>.png`, annotated with bubble labels and filled-bubble highlights.
@@ -94,16 +96,15 @@ Keep the `fonts/` directory alongside the scripts or update paths in `omr_sheet_
 ```bash
 python omr_sheet_generator_new.py \
   --config sheet_config.json \
-  --questions 60 \
   --output sheets/omr_sheet.pdf
 ```
 
 **Arguments:**
 - `--config` – Path to JSON configuration file (optional). See [Configuration model](#configuration-model) for details.
-- `--questions` – Limit the number of question rows rendered (overrides `max_questions` in JSON).
+- `--questions` – (Optional) Limit the number of question rows rendered. If not specified, uses `question_option_ranges` from config. This flag is primarily for backwards compatibility with older configs using `max_questions`.
 - `--output` – Destination PDF path (default: `sheets/omr_sheet.pdf`). Parent directories created automatically.
 
-**Note:** The generator validates that your requested layout fits on the page and logs warnings if sections overflow.
+**Note:** The generator validates that your requested layout fits on the page and logs warnings if sections overflow. With the dynamic column width optimization, the system automatically fits as many questions as possible based on the available space and option counts.
 
 ### Render PDFs to images
 
@@ -120,13 +121,12 @@ Converts all `*.pdf` files in `sheets/` to sibling `.png` images at 200 DPI. Use
 
 ```bash
 python omr_processor.py \
-  --config sheet_config.json \
-  --questions 60
+  --config sheet_config.json
 ```
 
 **Arguments:**
 - `--config` – Path to JSON configuration file (must match the generator config used).
-- `--questions` – Limit questions processed (must match generator setting).
+- `--questions` – (Optional) Limit questions processed. If not specified, processes all questions defined in `question_option_ranges`. This must match the generator setting if you used `--questions` during generation.
 
 **Processing workflow:**
 1. Place scanned sheets (PNG/JPG/JPEG) in `sheets/`.
@@ -156,22 +156,31 @@ The `sheet_config.json` file controls these fields:
 
 ```json
 {
-  "class_options": 5,
+  "class_options": 2,
   "class_section_options": 3,
-  "roll_columns": 3,
+  "roll_columns": 4,
   "set_options": 4,
-  "question_options": 4,
-  "max_questions": 50
+  "question_option_ranges": [
+    {"start": 1, "end": 20, "options": 4},
+    {"start": 21, "end": 31, "options": 5},
+    {"start": 32, "end": 70, "options": 3}
+  ]
 }
 ```
 
 **Fields:**
-- `class_options` – Number of class/grade bubbles (e.g., 5 for grades 6-10)
+- `class_options` – Number of class/grade bubbles (e.g., 2 for grades 6-7, or 5 for grades 6-10)
 - `class_section_options` – Number of class section/division bubbles (e.g., 3 for sections a, b, c). Set to 0 to skip this section entirely.
-- `roll_columns` – Number of digits in the roll number (e.g., 3 for roll numbers 000-999). Roll numbers always have 10 rows for digits 0-9.
+- `roll_columns` – Number of digits in the roll number (e.g., 4 for roll numbers 0000-9999). Roll numbers always have 10 rows for digits 0-9.
 - `set_options` – Number of test set/version bubbles (e.g., 4 for sets A-D)
-- `question_options` – Number of answer choices per question (typically 4 for A/B/C/D)
-- `max_questions` – Maximum questions to render (omit or set `null` to fill available space)
+- `question_option_ranges` – Array of question ranges with varying option counts. Each range specifies:
+  - `start` – First question number in the range (inclusive)
+  - `end` – Last question number in the range (inclusive)
+  - `options` – Number of answer choices for questions in this range (e.g., 3 for A/B/C, 4 for A/B/C/D, 5 for A/B/C/D/E)
+
+**Dynamic column width optimization:** The layout engine automatically calculates column widths based on the actual number of options in each question range. Questions with fewer options (e.g., 3 choices) use narrower columns than questions with more options (e.g., 5 choices), allowing more questions to fit on the page.
+
+**Legacy format:** For backwards compatibility, you can use `"question_options": 4` and `"max_questions": 50` instead of `question_option_ranges`. This creates a single range with uniform options for all questions.
 
 **Important:** Use the **same config file** for both generation and processing, or bubbles will be sampled at wrong coordinates.
 
@@ -213,21 +222,33 @@ print(f"Options per question: {layout.question_options}")
 ### Saving configuration
 
 ```python
-from omr_config import SheetLayout
+from omr_config import SheetLayout, QuestionOptionRange
 from omr_config_loader import save_sheet_config
 
-# Create custom layout
+# Create custom layout with varying question options
 layout = SheetLayout(
     class_options=5,
     class_section_options=3,  # Class sections (a, b, c)
     roll_columns=4,  # 4-digit roll numbers (always 10 rows for digits 0-9)
     set_options=4,
-    question_options=5,  # A/B/C/D/E
-    max_questions=80
+    question_option_ranges=[
+        QuestionOptionRange(start=1, end=50, options=4),    # Questions 1-50: A/B/C/D
+        QuestionOptionRange(start=51, end=80, options=5),   # Questions 51-80: A/B/C/D/E
+    ]
 )
 
 # Save to JSON
 save_sheet_config(layout, "custom_config.json")
+
+# For uniform options across all questions (legacy format):
+layout_simple = SheetLayout(
+    class_options=5,
+    class_section_options=3,
+    roll_columns=4,
+    set_options=4,
+    question_options=4,      # All questions have 4 options
+    max_questions=60         # Maximum 60 questions
+)
 ```
 
 ## Layout engine & data flow
@@ -242,6 +263,9 @@ Determines how roll numbers, class/set bubbles, and questions are partitioned ac
 **`allocate_column_rows(specs, geometry, bubble_layout)`**
 Fits sections into available vertical space and raises informative errors when layouts overflow.
 
+**`simulate_single_column(specs, row_centers, is_first_column, question_counter, ...)`**
+Simulates the allocation of a single column to determine its width and question range based on actual option counts. Part of the iterative column allocation algorithm.
+
 **`calculate_anchor_positions(geometry, markers)`**
 Computes the four corner anchor marker rectangles for PDF rendering.
 
@@ -249,7 +273,13 @@ Computes the four corner anchor marker rectangles for PDF rendering.
 Returns anchor center points for image-based detection.
 
 **`generate_all_bubble_coordinates(geometry, bubble_layout, sheet)`**
-Yields every bubble's page coordinate as a `BubbleCoordinate` object, consumed by both:
+Uses iterative column allocation to generate all bubble coordinates. The algorithm:
+1. Simulates each column to determine actual width needed based on question options
+2. Checks if the column fits in available horizontal space
+3. Generates bubble coordinates only for columns that fit
+4. Automatically handles transitions between different option counts with dynamic headers
+
+Returns every bubble's page coordinate as a `BubbleCoordinate` object, consumed by both:
 - PDF renderer to draw circles
 - Processor to sample pixel values
 
