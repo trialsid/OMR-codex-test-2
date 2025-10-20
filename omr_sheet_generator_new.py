@@ -337,6 +337,7 @@ def draw_unified_bubble_section(
 
         # Get max options for this column
         max_question_options_in_col = col_info.max_question_options if col_info else 4
+        question_header_rows = col_info.question_headers if col_info else {}
 
         # Get row allocations for this column
         row_allocations, _ = allocate_column_rows(section_specs, row_centers, is_first_column)
@@ -344,6 +345,21 @@ def draw_unified_bubble_section(
         # Draw labels, headers, and boxes based on row allocations
         for allocation in row_allocations:
             x_base = column_origin + layout.label_column_width + layout.column_padding / 2
+
+            # Handle transition headers (rows reserved for new option counts)
+            if (
+                allocation.section_category == "question"
+                and allocation.row_index in question_header_rows
+            ):
+                # Draw question header tailored to the option count for this segment
+                pdf.set_font("Noto", size=10)
+                x_bubble_base = x_base + layout.radius
+                header_options = question_header_rows[allocation.row_index]
+                ascii_offsets = [chr(ord("A") + opt) for opt in range(header_options)]
+                for opt in range(header_options):
+                    x = x_bubble_base + opt * (layout.diameter + layout.option_gap)
+                    _text_centered(pdf, geom, x - 3.25, allocation.y_position, ascii_offsets[opt])
+                continue
 
             if allocation.row_type == "label":
                 # Draw section label
