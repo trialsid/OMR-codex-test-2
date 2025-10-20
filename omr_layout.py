@@ -335,189 +335,154 @@ def allocate_column_rows(
     return allocations, 0
 
 
-def pre_calculate_column_assignments(
-    geom: PageGeometry,
-    layout: BubbleLayout,
-    sheet: SheetLayout,
-    markers: MarkerConfig,
+def simulate_single_column(
+    section_specs: List[SectionSpec],
     row_centers: List[float],
-) -> List[ColumnInfo]:
-    """Pre-calculate which questions go into which columns and their max options.
+    is_first_column: bool,
+    question_counter: int,
+    sheet: SheetLayout,
+    layout: BubbleLayout,
+    col_idx: int,
+    x_position: float,
+) -> Optional[ColumnInfo]:
+    """Simulate allocation of a single column to determine its width and question range.
 
-    This is Pass 1 of the two-pass algorithm. It simulates the column allocation
-    process to determine per-column metadata without actually generating bubbles.
-
-    Returns:
-        List of ColumnInfo objects, one per column
+    Returns ColumnInfo if the column has content, None if no questions can be placed.
     """
-    section_specs = build_section_specifications(sheet)
+    # Allocate rows for this column
+    row_allocations, question_rows_in_col = allocate_column_rows(
+        section_specs, row_centers, is_first_column
+    )
 
-    # Calculate initial column widths using global max (for now, will refine later)
-    max_question_options_global = max(r.options for r in sheet.question_option_ranges) if sheet.question_option_ranges else 4
-    first_column_options = max(sheet.class_options, sheet.class_section_options, sheet.roll_columns, sheet.set_options, max_question_options_global)
-    first_column_width = layout.group_width(first_column_options)
-    other_column_width = layout.group_width(max_question_options_global)
+    # Track question assignments for this column
+    question_start = None
+    question_end = None
+    max_options_in_col = 0
+    question_headers: Dict[int, int] = {}
+    current_header_options: Optional[int] = None
+    pending_header_row: Optional[int] = None
 
-    available_width = geom.width - 2 * geom.margin
+    for idx, allocation in enumerate(row_allocations):
+        if allocation.section_category != "question":
+            continue
 
-    # Calculate how many columns can fit (preliminary)
-    column_positions: List[float] = []
-    current_x = geom.margin
-
-    if first_column_width <= available_width:
-        column_positions.append(current_x)
-        current_x += first_column_width
-    else:
-        return []  # Can't fit even first column
-
-    # Add subsequent columns while they fit
-    while current_x + other_column_width <= geom.margin + available_width:
-        column_positions.append(current_x)
-        current_x += other_column_width
-
-    # Now simulate question allocation to track which questions go where
-    column_infos: List[ColumnInfo] = []
-    question_counter = 1
-
-    for col_idx, column_origin in enumerate(column_positions):
-        is_first_column = (col_idx == 0)
-
-        # Allocate rows for this column
-        row_allocations, question_rows_in_col = allocate_column_rows(
-            section_specs, row_centers, is_first_column
-        )
-
-        # Track question assignments for this column
-        question_start = None
-        question_end = None
-        max_options_in_col = 0
-        question_headers: Dict[int, int] = {}
-        current_header_options: Optional[int] = None
-        pending_header_row: Optional[int] = None
-
-        for idx, allocation in enumerate(row_allocations):
-            if allocation.section_category != "question":
-                continue
-
-            # Handle initial header row
-            if allocation.row_type == "headers":
-                if sheet.max_questions is not None and question_counter > sheet.max_questions:
-                    break
-
-                question_opts = sheet.get_question_options(question_counter)
-                if question_opts is None:
-                    break
-
-                question_headers[allocation.row_index] = question_opts
-                current_header_options = question_opts
-                max_options_in_col = max(max_options_in_col, question_opts)
-                continue
-
-            if allocation.row_type != "bubbles":
-                continue
-
-            # Check if we've reached max_questions
+        # Handle initial header row
+        if allocation.row_type == "headers":
             if sheet.max_questions is not None and question_counter > sheet.max_questions:
                 break
 
             question_opts = sheet.get_question_options(question_counter)
             if question_opts is None:
-                question_counter += 1
-                continue
+                break
 
-            # Initialize current header options if first question
-            if current_header_options is None:
-                current_header_options = question_opts
-
-            # Detect option count transition
-            if question_opts != current_header_options:
-                # Count how many questions with the NEW option count remain
-                # We need at least 2 questions in the new segment to avoid orphans
-                remaining_questions_in_new_segment = 0
-                temp_counter = question_counter
-
-                while temp_counter <= (sheet.max_questions or float('inf')):
-                    temp_opts = sheet.get_question_options(temp_counter)
-                    if temp_opts is None:
-                        break
-                    if temp_opts == question_opts:
-                        remaining_questions_in_new_segment += 1
-                    temp_counter += 1
-
-                # Also check if we have enough rows
-                future_question_rows = sum(
-                    1 for future in row_allocations[idx + 1:]
-                    if future.row_type == "bubbles" and future.section_category == "question"
-                )
-
-                if remaining_questions_in_new_segment < 2 or future_question_rows < 2:
-                    # Not enough questions in new segment OR not enough rows available
-                    # This prevents orphaned single questions at column end
-                    break
-
-                # Reserve this row for transition header
-                question_headers[allocation.row_index] = question_opts
-                pending_header_row = allocation.row_index
-                current_header_options = question_opts
-                max_options_in_col = max(max_options_in_col, question_opts)
-                continue
-
-            # Track question range
-            if question_start is None:
-                question_start = question_counter
-            question_end = question_counter
-
+            question_headers[allocation.row_index] = question_opts
+            current_header_options = question_opts
             max_options_in_col = max(max_options_in_col, question_opts)
-            pending_header_row = None  # Header was successfully followed by bubbles
-            question_counter += 1
+            continue
 
-        # Clean up pending header if it wasn't followed by actual bubbles
-        if pending_header_row is not None:
-            question_headers.pop(pending_header_row, None)
+        if allocation.row_type != "bubbles":
+            continue
 
-        # If no questions were placed, clear all headers
-        if question_start is None:
-            question_headers.clear()
-
-        # Create ColumnInfo
-        # Calculate width based on max of actual bubbles and all header segments
-        header_values = tuple(question_headers.values())
-        column_max_options = max(max_options_in_col, *(header_values or (0,)))
-
-        if is_first_column:
-            col_width = first_column_width
-        else:
-            # For non-first columns, recalculate width based on actual max options
-            if column_max_options > 0:
-                col_width = layout.group_width(column_max_options)
-            else:
-                col_width = other_column_width
-
-        if column_max_options == 0:
-            column_max_options = 4
-
-        column_infos.append(ColumnInfo(
-            column_index=col_idx,
-            x_position=column_origin,
-            width=col_width,
-            is_first_column=is_first_column,
-            question_start=question_start,
-            question_end=question_end,
-            max_question_options=column_max_options,
-            question_headers=question_headers,
-        ))
-
-        # Stop if we've reached max questions
+        # Check if we've reached max_questions
         if sheet.max_questions is not None and question_counter > sheet.max_questions:
             break
 
-    # Recalculate x_positions based on actual widths
-    current_x = geom.margin
-    for col_info in column_infos:
-        col_info.x_position = current_x
-        current_x += col_info.width
+        question_opts = sheet.get_question_options(question_counter)
+        if question_opts is None:
+            question_counter += 1
+            continue
 
-    return column_infos
+        # Initialize current header options if first question
+        if current_header_options is None:
+            current_header_options = question_opts
+
+        # Detect option count transition
+        if question_opts != current_header_options:
+            # Count how many questions with the NEW option count remain
+            remaining_questions_in_new_segment = 0
+            temp_counter = question_counter
+
+            while temp_counter <= (sheet.max_questions or float('inf')):
+                temp_opts = sheet.get_question_options(temp_counter)
+                if temp_opts is None:
+                    break
+                if temp_opts == question_opts:
+                    remaining_questions_in_new_segment += 1
+                temp_counter += 1
+
+            # Check if we have enough rows for header + at least 1 question
+            future_question_rows = sum(
+                1 for future in row_allocations[idx + 1:]
+                if future.row_type == "bubbles" and future.section_category == "question"
+            )
+
+            # Need minimum 1 row after current row to start a new segment (current row for header + next row for question)
+            if future_question_rows < 1:
+                break
+
+            # Need at least 1 question to place
+            if remaining_questions_in_new_segment < 1:
+                break
+
+            # Reserve this row for transition header
+            question_headers[allocation.row_index] = question_opts
+            pending_header_row = allocation.row_index
+            current_header_options = question_opts
+            max_options_in_col = max(max_options_in_col, question_opts)
+            continue
+
+        # Track question range
+        if question_start is None:
+            question_start = question_counter
+        question_end = question_counter
+
+        max_options_in_col = max(max_options_in_col, question_opts)
+        pending_header_row = None  # Header was successfully followed by bubbles
+        question_counter += 1
+
+    # Clean up pending header if it wasn't followed by actual bubbles
+    if pending_header_row is not None:
+        question_headers.pop(pending_header_row, None)
+
+    # If no questions were placed, clear all headers
+    if question_start is None:
+        question_headers.clear()
+
+    # Calculate width based on max of actual bubbles and all header segments
+    header_values = tuple(question_headers.values())
+    column_max_options = max(max_options_in_col, *(header_values or (0,)))
+
+    if is_first_column:
+        # First column needs to accommodate all section types
+        first_column_options = max(
+            sheet.class_options,
+            sheet.class_section_options,
+            sheet.roll_columns,
+            sheet.set_options,
+            column_max_options if column_max_options > 0 else 4
+        )
+        col_width = layout.group_width(first_column_options)
+    else:
+        # For non-first columns, use actual max options
+        if column_max_options > 0:
+            col_width = layout.group_width(column_max_options)
+        else:
+            # No questions in this column
+            return None
+
+    if column_max_options == 0:
+        column_max_options = 4
+
+    return ColumnInfo(
+        column_index=col_idx,
+        x_position=x_position,
+        width=col_width,
+        is_first_column=is_first_column,
+        question_start=question_start,
+        question_end=question_end,
+        max_question_options=column_max_options,
+        question_headers=question_headers,
+    )
 
 
 def generate_all_bubble_coordinates(
@@ -526,7 +491,7 @@ def generate_all_bubble_coordinates(
     sheet: SheetLayout,
     markers: MarkerConfig,
 ) -> tuple[List[BubbleGroup], List[BoxCoordinate], float, List[ColumnInfo]]:
-    """Generate all bubble groups using modular section specifications.
+    """Generate all bubble groups using iterative column allocation.
 
     Order: Class → Roll → Set → Questions, flowing through columns.
 
@@ -554,29 +519,44 @@ def generate_all_bubble_coordinates(
     if not row_centers:
         return [], [], 0, []
 
-    # Pass 1: Pre-calculate which questions go into which columns
-    column_infos = pre_calculate_column_assignments(geom, layout, sheet, markers, row_centers)
-
-    if not column_infos:
-        print("Warning: Could not fit any columns on the page")
-        return [], [], 0, []
+    # Iterative column allocation
+    available_width = geom.width - 2 * geom.margin
+    current_x = geom.margin
 
     all_groups: List[BubbleGroup] = []
     all_boxes: List[BoxCoordinate] = []
+    column_infos: List[ColumnInfo] = []
     question_counter = 1
+    col_idx = 0
 
-    # Pass 2: Generate bubble groups using pre-calculated column info
-    reached_max_questions = False
-    for col_info in column_infos:
-        if reached_max_questions:
+    while True:
+        is_first_column = (col_idx == 0)
+
+        # Simulate this column to determine its requirements and width
+        col_info = simulate_single_column(
+            section_specs,
+            row_centers,
+            is_first_column,
+            question_counter,
+            sheet,
+            layout,
+            col_idx,
+            current_x
+        )
+
+        # If no questions can be placed, stop
+        if col_info is None:
             break
 
-        col_idx = col_info.column_index
-        column_origin = col_info.x_position
-        is_first_column = col_info.is_first_column
-        question_header_rows = col_info.question_headers
+        # Check if this column fits in available horizontal space
+        if current_x + col_info.width > geom.margin + available_width:
+            # Column doesn't fit, stop adding columns
+            break
 
-        # Allocate rows for this column
+        # Column fits! Add it to our list
+        column_infos.append(col_info)
+
+        # Allocate rows for this column (again, for actual generation)
         row_allocations, question_rows_in_col = allocate_column_rows(
             section_specs, row_centers, is_first_column
         )
@@ -587,27 +567,24 @@ def generate_all_bubble_coordinates(
             if (
                 allocation.section_category == "question"
                 and allocation.row_type == "bubbles"
-                and allocation.row_index in question_header_rows
+                and allocation.row_index in col_info.question_headers
             ):
                 continue
 
             if allocation.row_type == "bubbles":
-                # Check if we've reached max_questions before creating more question groups
+                # Check if we've reached max_questions
                 if allocation.section_category == "question" and sheet.max_questions is not None:
                     if question_counter > sheet.max_questions:
-                        reached_max_questions = True
                         break
 
                 # Check if we've reached the end of questions for this column
-                # (pre_calculate may have stopped early due to orphan prevention)
                 if allocation.section_category == "question" and col_info.question_end is not None:
                     if question_counter > col_info.question_end:
-                        # Stop placing questions in this column
                         break
 
                 # Create bubble group
                 group = create_bubble_group_from_allocation(
-                    allocation, column_origin, layout, sheet, col_idx, question_counter
+                    allocation, current_x, layout, sheet, col_idx, question_counter
                 )
                 if group:
                     all_groups.append(group)
@@ -617,13 +594,25 @@ def generate_all_bubble_coordinates(
             elif allocation.row_type == "boxes":
                 # Create roll number write-in boxes
                 boxes = create_boxes_from_allocation(
-                    allocation, column_origin, layout, sheet
+                    allocation, current_x, layout, sheet
                 )
                 all_boxes.extend(boxes)
 
-        # If no more questions fit in this column, stop generating columns
-        if not is_first_column and question_rows_in_col == 0:
+        # Move to next column
+        current_x += col_info.width
+        col_idx += 1
+
+        # Stop if we've placed all requested questions
+        if sheet.max_questions is not None and question_counter > sheet.max_questions:
             break
+
+        # Stop if this was a non-first column with no questions
+        if not is_first_column and col_info.question_start is None:
+            break
+
+    if not column_infos:
+        print("Warning: Could not fit any columns on the page")
+        return [], [], 0, []
 
     # Calculate roll_bottom for compatibility
     roll_bottom = 0
