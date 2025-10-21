@@ -4,6 +4,10 @@
   "roll_columns": 4,
   "set_options": 4,
   "question_option_ranges": [
-    {"start": 1, "end": 94, "options": 4}
+    {"start": 1, "end": 24, "options": 4},
+    {"start": 25, "end": 44, "options": 5},
+    {"start": 45, "end": 60, "options": 3},
+    {"start": 61, "end": 70, "options": 2}
+
   ]
 }

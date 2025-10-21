@@ -133,7 +133,7 @@ def draw_header_section(pdf: OMRPDF, geom: PageGeometry, markers: MarkerConfig) 
     # Title section - hierarchical flow (PaperGen style)
     # 1. School name (large, Stinger font)
     pdf.set_font("Stinger", "B", school_font_size)
-    school_name = "St. Xavier's High School"
+    school_name = "School High School"
     school_width = pdf.get_string_width(school_name)
     school_x = (geom.width - school_width) / 2
     _text(pdf, geom, school_x, header_top, school_name)
