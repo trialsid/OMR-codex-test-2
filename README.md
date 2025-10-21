@@ -18,6 +18,7 @@ A Python toolkit for generating, validating, and grading optical mark recognitio
 - **Single geometry source of truth** – `omr_layout.py` computes anchors, bubble groups, roll number boxes, and question grids used by both the PDF generator and the processor.
 - **Polished PDF sheets** – `omr_sheet_generator_new.py` uses [fpdf2](https://pyfpdf.github.io/fpdf2/) with bundled Noto Sans and Stinger fonts to render classroom-ready sheets with student instructions and school branding.
 - **Robust processing pipeline** – `omr_processor.py` detects square anchor markers, applies perspective correction, samples every configured bubble with adaptive thresholding, and writes labeled overlays.
+- **Grid-marker calibration** – Optional gutter tick detection refines bubble-row Y positions so warped scans stay aligned even after severe stretching.
 - **Flexible question layouts** – Support for varying option counts across different question ranges (e.g., 4 options for questions 1-20, 5 options for 21-31, 3 options for 32-70) with automatic dynamic transition headers.
 - **Dynamic column width optimization** – Intelligent space utilization that adjusts column widths based on actual question option counts, fitting more questions on the page when using fewer options.
 - **Helpful tooling** – PDF-to-image conversion, benchmarking scripts, and distortion stress tests simplify experimentation with different capture setups.
@@ -132,10 +133,11 @@ python omr_processor.py \
 1. Place scanned sheets (PNG/JPG/JPEG) in `sheets/`.
 2. The processor detects four square anchors in the corners and validates their geometry.
 3. Perspective correction normalizes the sheet while preserving input resolution (minimum ≈800×1000 px).
-4. An adaptive fill threshold is computed from the inner zone between anchors (compensates for lighting variations).
-5. Every bubble coordinate from `generate_all_bubble_coordinates()` is sampled and tagged (`class`, `roll`, `set`, or `question`).
-6. Filled bubbles (darkness > threshold) are outlined in **magenta** and labeled.
-7. Results saved to `processed/processed_<filename>.png` with console summaries.
+4. When enabled, gutter grid markers along both margins are detected to measure vertical drift and calibrate each bubble row.
+5. An adaptive fill threshold is computed from the inner zone between anchors (compensates for lighting variations).
+6. Every bubble coordinate from `generate_all_bubble_coordinates()` is sampled and tagged (`class`, `roll`, `set`, or `question`).
+7. Filled bubbles (darkness > threshold) are outlined in **magenta** and labeled.
+8. Results saved to `processed/processed_<filename>.png` with console summaries.
 
 **Error handling:** Processing continues even if individual files fail, making batch processing safe.
 
@@ -203,6 +205,13 @@ These are defined in `omr_config.py` with sensible defaults:
 - `anchor_size` – Square anchor side length (default: 20pt)
 - `grid_marker_size` – Gutter tick size (default: 6pt)
 - `grid_spacing` – Spacing between gutter ticks (default: 42pt)
+- `grid_calibration_enabled` – Toggle gutter-based row calibration (default: enabled)
+- `grid_calibration_min_fraction` – Minimum row coverage required before calibration applies
+- `grid_calibration_min_matches` – Absolute minimum number of tick rows required for calibration
+- `grid_marker_distance_limit` – Maximum normalized distance (in vertical-gap units) for matching ticks to rows
+- `grid_marker_area_tolerance` / `grid_marker_aspect_tolerance` – Shape filters for tick contours after rectification
+- `grid_marker_outlier_sigma` – MAD-based rejection threshold for spurious tick matches
+- `grid_marker_scale_tolerance` – Max allowed deviation from anchor-derived scale when fitting calibration
 
 To customize these, modify `omr_config.py` or instantiate custom objects in your scripts.
 

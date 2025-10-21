@@ -61,9 +61,18 @@ class BubbleLayout:
 @dataclass(frozen=True)
 class MarkerConfig:
     """Configuration for anchor and grid markers."""
+
     anchor_size: float = 20
     grid_marker_size: float = 6
     grid_spacing: float = 42
+    grid_calibration_enabled: bool = True
+    grid_calibration_min_fraction: float = 0.45
+    grid_calibration_min_matches: int = 12
+    grid_marker_distance_limit: float = 0.5
+    grid_marker_area_tolerance: float = 0.65
+    grid_marker_aspect_tolerance: float = 0.45
+    grid_marker_outlier_sigma: float = 3.5
+    grid_marker_scale_tolerance: float = 0.35
 
 
 @dataclass(frozen=True)

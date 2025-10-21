@@ -16,7 +16,7 @@ import math
 from dataclasses import dataclass
 from itertools import combinations, permutations
 from pathlib import Path
-from typing import List, Optional, Tuple, Dict
+from typing import Dict, List, Optional, Set, Tuple
 
 import cv2
 import numpy as np
@@ -60,6 +60,26 @@ class BubbleGroupSample:
 
     group: BubbleGroup
     detections: List[BubbleDetection]
+
+
+RowId = Tuple[str, int]
+
+
+@dataclass
+class GridCalibration:
+    """Encapsulates Y-axis calibration derived from grid markers."""
+
+    slope: float
+    intercept: float
+    residuals: Dict[RowId, float]
+    coverage: float
+    matched_rows: int
+
+    def apply(self, row_id: RowId, y_value: float) -> float:
+        """Apply calibration to a Y pixel coordinate for a specific row."""
+
+        adjusted = self.slope * y_value + self.intercept
+        return adjusted + self.residuals.get(row_id, 0.0)
 
 
 def detect_anchor_markers(
@@ -205,6 +225,179 @@ def detect_anchor_markers(
         return None
 
     return markers
+
+
+def detect_grid_markers(
+    corrected: np.ndarray,
+    geom: PageGeometry,
+    markers_cfg: MarkerConfig,
+) -> List[Tuple[int, int]]:
+    """Detect rectangular grid markers along the left/right margins."""
+
+    if not markers_cfg.grid_calibration_enabled:
+        return []
+
+    if corrected.ndim == 3:
+        gray = cv2.cvtColor(corrected, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = corrected
+
+    blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+    _, binary = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8), iterations=1)
+
+    img_height, img_width = gray.shape
+
+    scale_x = img_width / geom.width if geom.width > 0 else 1.0
+    scale_y = img_height / geom.height if geom.height > 0 else 1.0
+
+    expected_width = max(markers_cfg.grid_marker_size * 2.0 * scale_x, 1.0)
+    expected_height = max(markers_cfg.grid_marker_size * scale_y, 1.0)
+    expected_area = expected_width * expected_height
+
+    area_tol = markers_cfg.grid_marker_area_tolerance
+    min_area = expected_area * max(0.1, 1.0 - area_tol)
+    max_area = expected_area * (1.0 + area_tol)
+
+    expected_aspect = expected_width / expected_height if expected_height > 0 else 2.0
+    aspect_tol = markers_cfg.grid_marker_aspect_tolerance
+    min_aspect = expected_aspect * (1.0 - aspect_tol)
+    max_aspect = expected_aspect * (1.0 + aspect_tol)
+
+    margin_band = int(round(geom.margin * scale_x * 1.5 + expected_width))
+    margin_band = max(margin_band, int(expected_width * 2))
+
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    centers: List[Tuple[int, int]] = []
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        if area <= 0:
+            continue
+        if area < min_area or area > max_area:
+            continue
+
+        x, y, w, h = cv2.boundingRect(contour)
+        if h == 0:
+            continue
+
+        aspect_ratio = w / h
+        if aspect_ratio < min_aspect or aspect_ratio > max_aspect:
+            continue
+
+        center_x = x + w // 2
+        center_y = y + h // 2
+
+        if not (center_x < margin_band or center_x > (img_width - margin_band)):
+            continue
+
+        centers.append((center_x, center_y))
+
+    centers.sort(key=lambda pt: pt[1])
+    return centers
+
+
+def _compute_grid_calibration(
+    row_expectations: List[Tuple[RowId, float]],
+    markers: List[Tuple[int, int]],
+    layout: BubbleLayout,
+    markers_cfg: MarkerConfig,
+    scale_y: float,
+) -> Optional[GridCalibration]:
+    """Estimate per-row Y adjustments using detected grid markers."""
+
+    if not markers_cfg.grid_calibration_enabled:
+        return None
+
+    if not row_expectations or not markers:
+        return None
+
+    vertical_gap_px = layout.vertical_gap * scale_y if layout.vertical_gap > 0 else 0.0
+    base_distance = markers_cfg.grid_marker_size * scale_y
+    tolerance = max(vertical_gap_px * markers_cfg.grid_marker_distance_limit, base_distance)
+    tolerance = max(tolerance, 4.0)
+
+    # Map each row to the closest detected marker within tolerance
+    matches: Dict[RowId, Tuple[float, float, float]] = {}
+    for _, marker_y in markers:
+        best_row: Optional[Tuple[RowId, float]] = None
+        best_dist = float("inf")
+        for row_id, expected_y in row_expectations:
+            dist = abs(marker_y - expected_y)
+            if dist < best_dist:
+                best_dist = dist
+                best_row = (row_id, expected_y)
+
+        if best_row is None or best_dist > tolerance:
+            continue
+
+        row_id, expected_y = best_row
+        existing = matches.get(row_id)
+        if existing is None or best_dist < existing[2]:
+            matches[row_id] = (expected_y, float(marker_y), best_dist)
+
+    if not matches:
+        return None
+
+    matched_rows = [
+        (row_id, expected, observed)
+        for row_id, (expected, observed, _dist) in matches.items()
+    ]
+    matched_rows.sort(key=lambda item: item[1])
+
+    diffs = np.array([obs - exp for _, exp, obs in matched_rows], dtype=np.float64)
+    if diffs.size == 0:
+        return None
+
+    median_diff = float(np.median(diffs))
+    abs_deviation = np.abs(diffs - median_diff)
+    mad = float(np.median(abs_deviation))
+
+    if mad > 1e-6:
+        normalized = 0.6745 * (diffs - median_diff) / mad
+        mask = np.abs(normalized) <= markers_cfg.grid_marker_outlier_sigma
+    else:
+        mask = abs_deviation <= tolerance
+
+    filtered_rows = [row for row, keep in zip(matched_rows, mask) if keep]
+
+    if not filtered_rows:
+        return None
+
+    coverage = len(filtered_rows) / len(row_expectations)
+    min_required = min(markers_cfg.grid_calibration_min_matches, len(row_expectations))
+
+    if len(filtered_rows) < max(2, min_required) or coverage < markers_cfg.grid_calibration_min_fraction:
+        return None
+
+    expected_vals = np.array([exp for _, exp, _ in filtered_rows], dtype=np.float64)
+    observed_vals = np.array([obs for _, _, obs in filtered_rows], dtype=np.float64)
+
+    if expected_vals.size < 2:
+        return None
+
+    slope, intercept = np.polyfit(expected_vals, observed_vals, 1)
+    slope = float(slope)
+    intercept = float(intercept)
+
+    if not np.isfinite(slope) or not np.isfinite(intercept):
+        return None
+
+    if abs(slope - 1.0) > markers_cfg.grid_marker_scale_tolerance:
+        return None
+
+    residuals: Dict[RowId, float] = {}
+    for row_id, expected_y, observed_y in filtered_rows:
+        predicted = slope * expected_y + intercept
+        residuals[row_id] = float(observed_y - predicted)
+
+    return GridCalibration(
+        slope=slope,
+        intercept=intercept,
+        residuals=residuals,
+        coverage=coverage,
+        matched_rows=len(filtered_rows),
+    )
 
 
 def _select_best_marker_set(
@@ -427,6 +620,8 @@ def _coordinate_to_bubble(
     inner_gray: np.ndarray,
     layout: BubbleLayout,
     adaptive_threshold: float,
+    row_id: RowId,
+    calibration: Optional[GridCalibration],
 ) -> Optional[Bubble]:
     """Convert a PDF coordinate to pixel coordinates and sample fill state."""
 
@@ -436,8 +631,14 @@ def _coordinate_to_bubble(
     scale_x = page_width / geom.width
     scale_y = page_height / geom.height
 
-    abs_x = int(round(coord.x * scale_x))
-    abs_y = int(round(page_height - coord.y * scale_y))
+    abs_x_float = coord.x * scale_x
+    abs_y_float = page_height - coord.y * scale_y
+
+    if calibration is not None:
+        abs_y_float = calibration.apply(row_id, abs_y_float)
+
+    abs_x = int(round(abs_x_float))
+    abs_y = int(round(abs_y_float))
     abs_x = min(max(abs_x, 0), max(page_width - 1, 0))
     abs_y = min(max(abs_y, 0), max(page_height - 1, 0))
 
@@ -493,6 +694,20 @@ def sample_bubbles_from_coordinates(
     scale_x = width / geom.width if geom.width > 0 else 1.0
     scale_y = height / geom.height if geom.height > 0 else 1.0
 
+    row_expectations: List[Tuple[RowId, float]] = []
+    seen_rows: Set[RowId] = set()
+    for group in layout_groups:
+        if not group.bubbles:
+            continue
+        row_id = (group.category, group.group_index)
+        if row_id in seen_rows:
+            continue
+        expected_y = height - group.bubbles[0].y * scale_y
+        row_expectations.append((row_id, expected_y))
+        seen_rows.add(row_id)
+
+    row_expectations.sort(key=lambda item: item[1])
+
     centers = calculate_anchor_centers(geom, markers)
     half_anchor = markers.anchor_size / 2.0
     half_anchor_x = int(round(half_anchor * scale_x))
@@ -526,10 +741,28 @@ def sample_bubbles_from_coordinates(
     # Use inner_gray to exclude anchor markers which would skew percentiles
     adaptive_threshold = calculate_adaptive_fill_threshold(inner_gray, layout.fill_threshold)
 
+    calibration: Optional[GridCalibration] = None
+    if markers.grid_calibration_enabled:
+        grid_markers = detect_grid_markers(corrected, geom, markers)
+        calibration = _compute_grid_calibration(
+            row_expectations,
+            grid_markers,
+            layout,
+            markers,
+            scale_y,
+        )
+        if calibration is not None:
+            print(
+                "Grid calibration matched "
+                f"{calibration.matched_rows} rows "
+                f"({calibration.coverage * 100:.1f}% coverage, scale {calibration.slope:.4f})"
+            )
+
     group_samples: List[BubbleGroupSample] = []
 
     for group in layout_groups:
         detections: List[BubbleDetection] = []
+        row_id = (group.category, group.group_index)
         for coord in group.bubbles:
             bubble = _coordinate_to_bubble(
                 coord,
@@ -541,6 +774,8 @@ def sample_bubbles_from_coordinates(
                 inner_gray,
                 layout,
                 adaptive_threshold,
+                row_id,
+                calibration,
             )
             if bubble is not None:
                 detections.append(BubbleDetection(layout=coord, bubble=bubble))
