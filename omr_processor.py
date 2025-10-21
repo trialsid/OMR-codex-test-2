@@ -12,11 +12,14 @@ The processed images are saved to the ``processed/`` directory.
 from __future__ import annotations
 
 import csv
-import cv2
-import numpy as np
+import math
 from dataclasses import dataclass
+from itertools import combinations, permutations
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict
+
+import cv2
+import numpy as np
 
 from omr_config import PageGeometry, BubbleLayout, MarkerConfig, SheetLayout
 from omr_layout import (
@@ -77,10 +80,18 @@ def detect_anchor_markers(
     """
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
 
+    # Improve contrast to help in uneven lighting conditions
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    enhanced = clahe.apply(gray)
+
+    # Gentle blur removes speckle noise before thresholding
+    blurred = cv2.GaussianBlur(enhanced, (5, 5), 0)
+
     # Use Otsu's automatic thresholding to handle varying lighting conditions
-    # This automatically finds the optimal threshold between dark markers and light background
-    # Works for underexposed, overexposed, and normal lighting scenarios
-    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    _, binary = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+    # Close small gaps inside markers - using 2 iterations for better robustness
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8), iterations=2)
 
     img_height, img_width = gray.shape
 
@@ -90,61 +101,99 @@ def detect_anchor_markers(
     expected_anchor_size = markers_cfg.anchor_size * scale
     expected_area = expected_anchor_size ** 2
 
-    # Allow 50% tolerance for size variation
-    min_area = expected_area * 0.5
-    max_area = expected_area * 2.0
+    expected_centers = calculate_anchor_centers(geom, markers_cfg)
+    scale_x = img_width / geom.width if geom.width > 0 else 1.0
+    scale_y = img_height / geom.height if geom.height > 0 else 1.0
 
-    # Define corner bands (anchors should be in outer portions of image)
-    # Allows for realistic mobile captures with some margin around the sheet
-    corner_band_x = img_width * 0.25
-    corner_band_y_top = img_height * 0.35    # 35% from top (accounts for 20% header)
-    corner_band_y_bottom = img_height * 0.20  # 20% from bottom (anchors near edge)
+    expected_points_px = [
+        (
+            int(round(expected_centers["top_left"][0] * scale_x)),
+            int(round(img_height - expected_centers["top_left"][1] * scale_y)),
+        ),
+        (
+            int(round(expected_centers["top_right"][0] * scale_x)),
+            int(round(img_height - expected_centers["top_right"][1] * scale_y)),
+        ),
+        (
+            int(round(expected_centers["bottom_left"][0] * scale_x)),
+            int(round(img_height - expected_centers["bottom_left"][1] * scale_y)),
+        ),
+        (
+            int(round(expected_centers["bottom_right"][0] * scale_x)),
+            int(round(img_height - expected_centers["bottom_right"][1] * scale_y)),
+        ),
+    ]
 
-    # Find contours
-    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    def collect_candidates(binary_img: np.ndarray, size_scale: Tuple[float, float], corner_expand: float) -> List[Tuple[int, int]]:
+        min_area = expected_area * size_scale[0]
+        max_area = expected_area * size_scale[1]
 
-    # Filter for square-like contours with expected size and corner positions
-    candidates = []
-    for contour in contours:
-        area = cv2.contourArea(contour)
+        corner_band_x = img_width * (0.25 + corner_expand)
+        corner_band_y_top = img_height * (0.35 + corner_expand)
+        corner_band_y_bottom = img_height * (0.20 + corner_expand)
 
-        # Check area against expected anchor size
-        if area < min_area or area > max_area:
-            continue
+        contours, _ = cv2.findContours(binary_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        # Check if it's square-like
-        x, y, w, h = cv2.boundingRect(contour)
-        aspect_ratio = float(w) / h if h > 0 else 0
-        if not (0.6 < aspect_ratio < 1.4):  # Approximately square
-            continue
+        local_candidates: List[Tuple[int, int]] = []
+        for contour in contours:
+            area = cv2.contourArea(contour)
 
-        # Check if bounding box is in a corner region
-        center_x = x + w // 2
-        center_y = y + h // 2
+            if area < min_area or area > max_area:
+                continue
 
-        in_left_band = center_x < corner_band_x
-        in_right_band = center_x > (img_width - corner_band_x)
-        in_top_band = center_y < corner_band_y_top
-        in_bottom_band = center_y > (img_height - corner_band_y_bottom)
+            x, y, w, h = cv2.boundingRect(contour)
+            aspect_ratio = float(w) / h if h > 0 else 0
+            if not (0.6 < aspect_ratio < 1.4):
+                continue
 
-        # Must be in a corner (left/right AND top/bottom)
-        in_corner = (in_left_band or in_right_band) and (in_top_band or in_bottom_band)
+            center_x = x + w // 2
+            center_y = y + h // 2
 
-        if not in_corner:
-            continue
+            in_left_band = center_x < corner_band_x
+            in_right_band = center_x > (img_width - corner_band_x)
+            in_top_band = center_y < corner_band_y_top
+            in_bottom_band = center_y > (img_height - corner_band_y_bottom)
 
-        candidates.append((center_x, center_y))
+            if not ((in_left_band or in_right_band) and (in_top_band or in_bottom_band)):
+                continue
 
+            local_candidates.append((center_x, center_y))
+
+        return local_candidates
+
+    # First pass with stricter bounds
+    candidates = collect_candidates(binary, (0.5, 2.0), 0.0)
+
+    # Retry with adaptive thresholding and relaxed geometry if we missed markers
     if len(candidates) < 4:
-        print(f"Warning: Only found {len(candidates)} anchor candidates (expected 4)")
+        relaxed = cv2.adaptiveThreshold(
+            blurred,
+            255,
+            cv2.ADAPTIVE_THRESH_MEAN_C,
+            cv2.THRESH_BINARY_INV,
+            15,
+            5,
+        )
+        relaxed = cv2.morphologyEx(relaxed, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8), iterations=2)
+        relaxed_candidates = collect_candidates(relaxed, (0.3, 3.0), 0.1)
+        candidates.extend(relaxed_candidates)
+
+    # Deduplicate candidate coordinates while preserving order
+    unique_candidates: List[Tuple[int, int]] = []
+    seen = set()
+    for pt in candidates:
+        if pt not in seen:
+            unique_candidates.append(pt)
+            seen.add(pt)
+
+    if len(unique_candidates) < 4:
+        print(f"Warning: Only found {len(unique_candidates)} anchor candidates (expected 4)")
         return None
 
-    # Sort candidates to find the four corners
-    candidates = sorted(candidates, key=lambda p: p[1])  # Sort by y
-    top_two = sorted(candidates[:2], key=lambda p: p[0])  # Top row, sort by x
-    bottom_two = sorted(candidates[-2:], key=lambda p: p[0])  # Bottom row, sort by x
-
-    markers = [top_two[0], top_two[1], bottom_two[0], bottom_two[1]]
+    markers = _select_best_marker_set(unique_candidates, expected_points_px)
+    if markers is None:
+        print("Warning: Unable to select consistent anchor markers from candidates")
+        return None
 
     # Validate geometric layout: check if markers form a reasonable rectangle
     if not _validate_rectangle_geometry(markers, img_width, img_height):
@@ -152,6 +201,42 @@ def detect_anchor_markers(
         return None
 
     return markers
+
+
+def _select_best_marker_set(
+    candidates: List[Tuple[int, int]],
+    expected_points: List[Tuple[int, int]],
+) -> Optional[List[Tuple[int, int]]]:
+    """Pick the four candidate points that best match the expected corners."""
+
+    if len(candidates) < 4:
+        return None
+
+    # Keep only the candidates closest to any expected corner to limit combinations
+    if len(candidates) > 8:
+        def min_distance(pt: Tuple[int, int]) -> float:
+            return min(
+                math.hypot(pt[0] - exp[0], pt[1] - exp[1]) for exp in expected_points
+            )
+
+        candidates = sorted(candidates, key=min_distance)[:8]
+
+    indices = list(range(len(candidates)))
+    best_score = float("inf")
+    best_assignment: Optional[List[Tuple[int, int]]] = None
+
+    for combo in combinations(indices, 4):
+        for perm in permutations(combo):
+            score = 0.0
+            for idx, expected in zip(perm, expected_points):
+                candidate = candidates[idx]
+                score += (candidate[0] - expected[0]) ** 2 + (candidate[1] - expected[1]) ** 2
+
+            if score < best_score:
+                best_score = score
+                best_assignment = [candidates[idx] for idx in perm]
+
+    return best_assignment
 
 
 def _validate_rectangle_geometry(
@@ -261,28 +346,8 @@ def correct_skew(
     scale = max((scale_x + scale_y) / 2.0, 1e-6)
 
     # Compute output dimensions preserving the detected resolution
-    output_width = int(round(geom.width * scale))
-    output_height = int(round(geom.height * scale))
-
-    # Clamp to reasonable bounds while preserving aspect ratio
-    img_height, img_width = image.shape[:2]
-
-    # First apply maximum bounds (don't exceed source)
-    output_width = min(output_width, img_width)
-    output_height = min(output_height, img_height)
-
-    # Then apply minimum bounds while preserving aspect ratio
-    min_width = 800
-    min_height = 1000
-    aspect_ratio = geom.width / geom.height
-
-    if output_width < min_width:
-        output_width = min_width
-        output_height = int(round(output_width / aspect_ratio))
-
-    if output_height < min_height:
-        output_height = min_height
-        output_width = int(round(output_height * aspect_ratio))
+    output_width = max(50, int(round(geom.width * scale)))
+    output_height = max(50, int(round(geom.height * scale)))
 
     scale_x_out = output_width / geom.width if geom.width > 0 else 1.0
     scale_y_out = output_height / geom.height if geom.height > 0 else 1.0
@@ -301,6 +366,7 @@ def correct_skew(
     # Apply transformation
     corrected = cv2.warpPerspective(image, matrix, (output_width, output_height))
 
+    img_height, img_width = image.shape[:2]
     print(f"Applied perspective correction: {img_width}x{img_height} -> {output_width}x{output_height} (scale: {scale:.2f}x)")
 
     return corrected
@@ -383,7 +449,7 @@ def _coordinate_to_bubble(
         return None
 
     radius_scale = (scale_x + scale_y) / 2.0
-    radius = max(1, int(round(coord.radius * radius_scale)))
+    radius = max(3, int(round(coord.radius * radius_scale)))
 
     is_filled, intensity = analyze_bubble_fill(
         inner_gray,
@@ -494,13 +560,18 @@ def analyze_bubble_fill(gray: np.ndarray, x: int, y: int, radius: int, threshold
     """
     h, w = gray.shape
 
+    radius = max(radius, 3)
+
+    ring_inner_radius = max(radius * 1.2, radius + 1)
+    ring_outer_radius = max(ring_inner_radius + 2, radius * 1.8)
+
     # Extract local region around bubble (optimization: only process nearby pixels)
     # Region size: enough to include background ring
-    region_size = int(radius * 2.0) + 1
-    x_min = max(0, x - region_size)
-    x_max = min(w, x + region_size + 1)
-    y_min = max(0, y - region_size)
-    y_max = min(h, y + region_size + 1)
+    region_radius = int(math.ceil(ring_outer_radius))
+    x_min = max(0, x - region_radius)
+    x_max = min(w, x + region_radius + 1)
+    y_min = max(0, y - region_radius)
+    y_max = min(h, y + region_radius + 1)
 
     # Extract local region
     local_region = gray[y_min:y_max, x_min:x_max]
@@ -520,9 +591,17 @@ def analyze_bubble_fill(gray: np.ndarray, x: int, y: int, radius: int, threshold
     interior_mask = distance_from_center <= (radius * 0.7)
 
     # Background ring: pixels in ring slightly outside the bubble
-    ring_inner_radius = radius * 1.2
-    ring_outer_radius = radius * 1.8
-    background_mask = (distance_from_center >= ring_inner_radius) & (distance_from_center <= ring_outer_radius)
+    background_mask = (
+        (distance_from_center >= ring_inner_radius)
+        & (distance_from_center <= ring_outer_radius)
+    )
+
+    if not np.any(background_mask):
+        expanded_outer = ring_inner_radius + max(3, radius)
+        background_mask = (
+            (distance_from_center >= ring_inner_radius)
+            & (distance_from_center <= expanded_outer)
+        )
 
     # Calculate mean intensity (lower = darker = more filled)
     interior_pixels = local_region[interior_mask]
