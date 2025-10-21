@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import cv2
 import numpy as np
 
-from omr_config import PageGeometry, BubbleLayout, MarkerConfig, SheetLayout
+from omr_config import PageGeometry, BubbleLayout, MarkerConfig, SheetLayout, AnchorDetectionZones
 from omr_config_loader import load_sheet_config
 from omr_processor import (
     detect_anchor_markers,
@@ -344,44 +344,76 @@ def process_distorted_image(
     layout: BubbleLayout,
     sheet: SheetLayout,
     markers_cfg: MarkerConfig,
+    zones_cfg: Optional[AnchorDetectionZones] = None,
 ) -> Tuple[bool, str, int, int, int, Optional[np.ndarray], Optional[np.ndarray]]:
     """Process a distorted image and return results.
 
     Returns:
         (success, error_message, anchors_detected, roll_bubbles, questions, processed_image, anchor_viz)
     """
+    if zones_cfg is None:
+        zones_cfg = AnchorDetectionZones()
+
     try:
         # Detect anchor markers
-        anchor_points = detect_anchor_markers(image, geom, markers_cfg)
+        anchor_points = detect_anchor_markers(image, geom, markers_cfg, zones_cfg)
 
         # Create anchor visualization with corner zones overlay
         anchor_viz = image.copy()
         img_height, img_width = image.shape[:2]
 
-        # Draw corner zone bands (where anchors are expected)
-        # Match the actual detection logic in omr_processor.py
-        corner_band_x = int(img_width * 0.25)
-        corner_band_y_top = int(img_height * 0.35)     # 35% from top (accounts for 20% header)
-        corner_band_y_bottom = int(img_height * 0.20)  # 20% from bottom (anchors near edge)
+        # Draw corner zone bands showing both detection passes
+        # First pass (strict zones) - darker orange
+        # Second pass (relaxed zones) - lighter orange
 
-        # Create overlay for semi-transparent corner zones
+        # Get zone dimensions for both passes
+        strict_x, strict_y_top, strict_y_bottom = zones_cfg.get_zones(img_width, img_height, 0.0)
+        relaxed_x, relaxed_y_top, relaxed_y_bottom = zones_cfg.get_zones(
+            img_width, img_height, zones_cfg.relaxed_expansion
+        )
+
+        # Convert to integers
+        strict_x, strict_y_top, strict_y_bottom = int(strict_x), int(strict_y_top), int(strict_y_bottom)
+        relaxed_x, relaxed_y_top, relaxed_y_bottom = int(relaxed_x), int(relaxed_y_top), int(relaxed_y_bottom)
+
+        # Create overlays for both zone passes
         overlay = anchor_viz.copy()
-        zone_color = (0, 165, 255)  # Orange in BGR
 
-        # Top-left corner zone
-        cv2.rectangle(overlay, (0, 0), (corner_band_x, corner_band_y_top), zone_color, -1)
+        # Relaxed zones (lighter orange, drawn first so strict zones layer on top)
+        relaxed_color = (128, 200, 255)  # Light orange in BGR
 
-        # Top-right corner zone
-        cv2.rectangle(overlay, (img_width - corner_band_x, 0),
-                     (img_width, corner_band_y_top), zone_color, -1)
+        # Top-left relaxed zone
+        cv2.rectangle(overlay, (0, 0), (relaxed_x, relaxed_y_top), relaxed_color, -1)
 
-        # Bottom-left corner zone
-        cv2.rectangle(overlay, (0, img_height - corner_band_y_bottom),
-                     (corner_band_x, img_height), zone_color, -1)
+        # Top-right relaxed zone
+        cv2.rectangle(overlay, (img_width - relaxed_x, 0),
+                     (img_width, relaxed_y_top), relaxed_color, -1)
 
-        # Bottom-right corner zone
-        cv2.rectangle(overlay, (img_width - corner_band_x, img_height - corner_band_y_bottom),
-                     (img_width, img_height), zone_color, -1)
+        # Bottom-left relaxed zone
+        cv2.rectangle(overlay, (0, img_height - relaxed_y_bottom),
+                     (relaxed_x, img_height), relaxed_color, -1)
+
+        # Bottom-right relaxed zone
+        cv2.rectangle(overlay, (img_width - relaxed_x, img_height - relaxed_y_bottom),
+                     (img_width, img_height), relaxed_color, -1)
+
+        # Strict zones (darker orange, drawn on top)
+        strict_color = (0, 165, 255)  # Orange in BGR
+
+        # Top-left strict zone
+        cv2.rectangle(overlay, (0, 0), (strict_x, strict_y_top), strict_color, -1)
+
+        # Top-right strict zone
+        cv2.rectangle(overlay, (img_width - strict_x, 0),
+                     (img_width, strict_y_top), strict_color, -1)
+
+        # Bottom-left strict zone
+        cv2.rectangle(overlay, (0, img_height - strict_y_bottom),
+                     (strict_x, img_height), strict_color, -1)
+
+        # Bottom-right strict zone
+        cv2.rectangle(overlay, (img_width - strict_x, img_height - strict_y_bottom),
+                     (img_width, img_height), strict_color, -1)
 
         # Blend overlay with original (25% opacity)
         anchor_viz = cv2.addWeighted(overlay, 0.25, anchor_viz, 0.75, 0)
@@ -865,6 +897,7 @@ def main():
     geom = PageGeometry()
     layout = BubbleLayout()
     markers_cfg = MarkerConfig()
+    zones_cfg = AnchorDetectionZones()
 
     # Paths
     input_image = args.input
@@ -905,7 +938,7 @@ def main():
         # Process the distorted image
         start_time = time.perf_counter()
         success, error_msg, anchors, roll_bubbles, questions, processed, anchor_viz = \
-            process_distorted_image(distorted_image, geom, layout, sheet, markers_cfg)
+            process_distorted_image(distorted_image, geom, layout, sheet, markers_cfg, zones_cfg)
         processing_time_ms = (time.perf_counter() - start_time) * 1000
 
         # Save anchor visualization

@@ -67,6 +67,40 @@ class MarkerConfig:
 
 
 @dataclass(frozen=True)
+class AnchorDetectionZones:
+    """Configuration for anchor marker detection zones.
+
+    These define the corner regions where anchor markers are expected to be found.
+    Detection uses a two-pass approach:
+    - First pass: Uses strict zones (corner_expand = 0.0)
+    - Second pass: Uses relaxed zones (corner_expand = relaxed_expansion)
+    """
+    # Base zone dimensions (as fraction of image dimensions)
+    corner_band_x_ratio: float = 0.25      # 25% from left/right edges
+    corner_band_y_top_ratio: float = 0.35  # 35% from top (accounts for 20% header)
+    corner_band_y_bottom_ratio: float = 0.20  # 20% from bottom
+
+    # Relaxed zone expansion (added to base ratios in second pass)
+    relaxed_expansion: float = 0.1  # 10% expansion for second pass
+
+    def get_zones(self, img_width: int, img_height: int, corner_expand: float = 0.0):
+        """Calculate zone boundaries in pixels.
+
+        Args:
+            img_width: Image width in pixels
+            img_height: Image height in pixels
+            corner_expand: Expansion factor (0.0 for strict, relaxed_expansion for relaxed)
+
+        Returns:
+            Tuple of (corner_band_x, corner_band_y_top, corner_band_y_bottom) in pixels
+        """
+        corner_band_x = img_width * (self.corner_band_x_ratio + corner_expand)
+        corner_band_y_top = img_height * (self.corner_band_y_top_ratio + corner_expand)
+        corner_band_y_bottom = img_height * (self.corner_band_y_bottom_ratio + corner_expand)
+        return corner_band_x, corner_band_y_top, corner_band_y_bottom
+
+
+@dataclass(frozen=True)
 class QuestionOptionRange:
     """Defines a range of questions with a specific number of options."""
     start: int
@@ -150,4 +184,5 @@ DEFAULT_CONFIG = {
     'layout': BubbleLayout(),
     'markers': MarkerConfig(),
     'sheet': SheetLayout(),
+    'anchor_zones': AnchorDetectionZones(),
 }

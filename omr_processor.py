@@ -21,7 +21,7 @@ from typing import List, Optional, Tuple, Dict
 import cv2
 import numpy as np
 
-from omr_config import PageGeometry, BubbleLayout, MarkerConfig, SheetLayout
+from omr_config import PageGeometry, BubbleLayout, MarkerConfig, SheetLayout, AnchorDetectionZones
 from omr_layout import (
     BubbleCoordinate,
     BubbleGroup,
@@ -65,7 +65,8 @@ class BubbleGroupSample:
 def detect_anchor_markers(
     image: np.ndarray,
     geom: PageGeometry,
-    markers_cfg: MarkerConfig
+    markers_cfg: MarkerConfig,
+    zones_cfg: Optional[AnchorDetectionZones] = None
 ) -> Optional[List[Tuple[int, int]]]:
     """Detect the four corner anchor markers with validation.
 
@@ -73,11 +74,14 @@ def detect_anchor_markers(
         image: Input image
         geom: Page geometry configuration
         markers_cfg: Marker configuration with expected anchor size
+        zones_cfg: Anchor detection zones configuration (optional, uses defaults if not provided)
 
     Returns:
         List of (x, y) coordinates for [top-left, top-right, bottom-left, bottom-right]
         or None if detection fails.
     """
+    if zones_cfg is None:
+        zones_cfg = AnchorDetectionZones()
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
 
     # Improve contrast to help in uneven lighting conditions
@@ -128,9 +132,9 @@ def detect_anchor_markers(
         min_area = expected_area * size_scale[0]
         max_area = expected_area * size_scale[1]
 
-        corner_band_x = img_width * (0.25 + corner_expand)
-        corner_band_y_top = img_height * (0.35 + corner_expand)
-        corner_band_y_bottom = img_height * (0.20 + corner_expand)
+        corner_band_x, corner_band_y_top, corner_band_y_bottom = zones_cfg.get_zones(
+            img_width, img_height, corner_expand
+        )
 
         contours, _ = cv2.findContours(binary_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
@@ -175,7 +179,7 @@ def detect_anchor_markers(
             5,
         )
         relaxed = cv2.morphologyEx(relaxed, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8), iterations=2)
-        relaxed_candidates = collect_candidates(relaxed, (0.3, 3.0), 0.1)
+        relaxed_candidates = collect_candidates(relaxed, (0.3, 3.0), zones_cfg.relaxed_expansion)
         candidates.extend(relaxed_candidates)
 
     # Deduplicate candidate coordinates while preserving order
